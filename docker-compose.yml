@@ -1,0 +1,8 @@
+services:
+  slidegen:
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY}
+      SLIDEGEN_MODEL: ${SLIDEGEN_MODEL:-mimo-v2.5}
+      SLIDEGEN_BASE_URL: ${SLIDEGEN_BASE_URL:-https://opencode.ai/zen/go/v1}
