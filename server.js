@@ -1,7 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { SYSTEMS } = require("./design/systems.js");
+const { SYSTEMS, EDIT_SYSTEM } = require("./design/systems.js");
 
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = path.join(__dirname, "public");
@@ -18,7 +18,7 @@ function log(...args) {
 }
 
 function send(res, code, body, type = "application/json") {
-  res.writeHead(code, { "Content-Type": type, "Content-Length": Buffer.byteLength(body) });
+  res.writeHead(code, { "Content-Type": type, "Content-Length": Buffer.byteLength(body), "Cache-Control": "no-store" });
   res.end(body);
 }
 
@@ -38,9 +38,9 @@ function providerConfig(provider = {}) {
 }
 
 async function smallCall(config, urlPath, body, timeoutMs = 60_000) {
-  const h = { "Content-Type": "application/json", ...config.headers };
+  const h = { ...config.headers };
   if (config.apiKey) h.Authorization = `Bearer ${config.apiKey}`;
-  const r = await fetch(config.baseUrl + urlPath, { method: "POST", headers: h, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+  const r = await fetch(config.baseUrl + urlPath, { method: "GET", headers: h, signal: AbortSignal.timeout(timeoutMs) });
   if (!r.ok) throw new Error(`provider ${r.status}: ${(await r.text()).slice(0, 500)}`);
   return r.json();
 }
@@ -182,6 +182,26 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/save") {
+    readBody(req, (body) => {
+      try {
+        const { html, title } = JSON.parse(body || "{}");
+        if (!html || !/<html/i.test(html)) return done(400, JSON.stringify({ error: "html required" }));
+        const series = title || "edited";
+        const base = path.join(__dirname, "output", `${series}`);
+        fs.mkdirSync(base, { recursive: true });
+        const n = fs.readdirSync(base).filter((f) => f.endsWith(".html")).length + 1;
+        const file = path.join(base, `${n}-deck.html`);
+        fs.writeFileSync(file, html);
+        log(`saved ${path.relative(__dirname, file)} (${html.length} chars)`);
+        done(200, JSON.stringify({ saved: path.basename(file) }));
+      } catch (e) {
+        done(500, JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/edit") {
     readBody(req, async (body) => {
       try {
@@ -192,7 +212,7 @@ const server = http.createServer(async (req, res) => {
         const config = providerConfig(provider);
         if (!config.apiKey) return done(400, JSON.stringify({ error: "no API key: set it in provider settings" }));
         const messages = [
-          { role: "system", content: SYSTEMS[preset] || SYSTEMS.swiss },
+          { role: "system", content: EDIT_SYSTEM },
           { role: "user", content: editPrompt(prompt || "(brief not kept)", slides, index, action || "replace", instruction.trim()) },
         ];
         let out = "";
@@ -243,6 +263,11 @@ const server = http.createServer(async (req, res) => {
         html = html.replace(/^\s*```[a-z]*\n?/, "").replace(/```\s*$/, "").trim();
         if (!/<html/i.test(html)) throw new Error("model did not return HTML. First 300 chars: " + html.slice(0, 300));
         log(`${req.method} ${req.url} 200 in ${Date.now() - t0}ms (${html.length} chars)`);
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const dir = path.join(__dirname, "output", stamp);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "deck.html"), html);
+        log(`saved to ${path.relative(__dirname, dir)}/deck.html`);
         write({ phase: "done", html });
       } catch (e) {
         log(`${req.method} ${req.url} 502 in ${Date.now() - t0}ms — ${e.message.slice(0, 120)}`);

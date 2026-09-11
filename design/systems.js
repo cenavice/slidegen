@@ -11,7 +11,14 @@ STRICT FORMAT RULES
 - Single <html> file. Each slide is one full-viewport <section class="slide">.
 - SPA navigation: arrow keys / PageUp / PageDown, click zones (right = next, left = prev),
   slide counter bottom-right, " press ? for help " hint. No external JS libs.
-- Slide size: responsive 16:9 stage centered on a black letterbox, scaled via CSS transform.
+SLIDE GEOMETRY (hard constraint — exact PowerPoint-style framing)
+- Decks are 16:9, ALWAYS. The stage is a fixed 1280×720 canvas (use px freely inside it);
+  center it and scale it to fit the window with ONE transform: scale(min(vw/1280, vh/720)).
+- The whole viewport outside the 1280×720 stage is a clean letterbox (near-black or matching
+  the deck surface). No content may render outside the stage; nothing may distort the ratio.
+- Never use viewport-relative vw/vh sizing INSIDE a slide; size in px/ch/rem against the stage.
+- Do not make slides full-height flows, scrollable pages, or variable-height stacks — each
+  <section class="slide"> is exactly one fixed 16:9 screen, like a PowerPoint slide.
 - Inline assets only: <svg> for diagrams/icons, CSS gradients for decoration. No <img> from network.
 
 CONTENT FIT RULES (hard constraints — a deck that overflows or is cramped has FAILED)
@@ -21,7 +28,10 @@ CONTENT FIT RULES (hard constraints — a deck that overflows or is cramped has 
 2. Fluid-safe sizing: use clamp() / rem for font sizes and percentages for spacing, so the
    slide never clips at any viewport. Become familiar with the ratio: total content height
    (including margins) must leave >= 8% free space at the bottom of each slide.
-3. Padding: >= 6% of slide width on every side; no element or text sits within 2% of a slide edge.
+3. Margins are CONCRETE, not abstract: on the 1280×720 stage every slide has padding
+   left/right >= 76px, top >= 64px, bottom >= 96px. Nothing (text, image, rule line,
+   background edge or shadow) may sit closer than 32px to a slide edge. Larger margins
+   are always fine; smaller are never fine. This whitespace is the deck's main design voice.
 4. Images/figures: width in the 30-55% range of the slide, aspect-ratio preserved (never
    stretched); maintain contrast margins around text; NO decorative float overlapping text.
 5. Lines: <= 46 chars per line of body text (measure), or adjust columns. Text and visuals
@@ -59,4 +69,21 @@ Near-black background (#0E1116), high-contrast warm off-white text, single amber
 serif display headlines, subtle 1px grid lines. Bloomberg Businessweek keynote energy.`,
 };
 
-module.exports = { SYSTEMS, BASE_RULES };
+// System prompt for single-slide regeneration/insertion: NOT the deck prompt.
+const EDIT_SYSTEM = `
+You are editing one slide inside an existing deck. You will receive neighboring slides
+as context and the deck's design system summary below. Output ONLY one
+<section class="slide"> block for the edited slide. The deck's global <style> already
+defines all classes, CSS variables, fonts and colors — REUSE them; do not redefine them,
+output no <html>, no <head>, no <style> unless a slide-local rule is essential.
+No markdown fences, no commentary — start directly with the <section> tag.
+
+DESIGN SYSTEM the deck was built with (summary):
+- 16:9 fixed 1280x720 stage, size in px; padding inside slides: >=76px left/right,
+  >=64px top, >=96px bottom; nothing closer than 32px to a slide edge.
+- Swatch: one accent + one neutral + one surface; serif/geometric display titles,
+  humanist sans body; type scale >= 3x; body line-height 1.4-1.6.
+- Structure variety over repeated card grids; illustration as inline <svg> only.
+`.trim();
+
+module.exports = { SYSTEMS, EDIT_SYSTEM };

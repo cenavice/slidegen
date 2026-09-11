@@ -5,114 +5,226 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>slidegen</title>
 <style>
-  :root { --bg: #0e1116; --fg: #f2ede4; --accent: #d97706; --line: #2a2f38; }
+  :root {
+    --bg:#eef1f4; --panel:#ffffff; --border:#d4dae0; --fg:#15202b; --muted:#52606d;
+    --accent:#1a6b4a; --accent-fg:#ffffff; --line:#e1e5ea; --err:#c0392b; --input:#f7f9fa;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; display: grid; grid-template-columns: 380px 1fr; height: 100vh; }
-  aside { padding: 24px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
-  h1 { font-size: 18px; margin: 0; letter-spacing: 0.05em; }
-  h1 span { color: var(--accent); }
-  textarea { min-height: 220px; resize: vertical; background: #161b22; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font: inherit; }
-  label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: #8b93a1; }
-  select { background: #161b22; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
-  button { background: var(--accent); color: #111; font-weight: 600; border: 0; border-radius: 8px; padding: 12px; font-size: 15px; cursor: pointer; }
-  button:disabled { opacity: 0.5; cursor: wait; }
-  #status { font-size: 13px; color: #8b93a1; min-height: 1.2em; white-space: pre-wrap; }
-  #error { color: #f87171; white-space: pre-wrap; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  main { position: relative; }
-  iframe { width: 100%; height: 100%; border: 0; background: #000; }
-  #placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: #566070; font-size: 14px; }
-  .toolbar { position: absolute; top: 12px; right: 12px; display: none; gap: 8px; z-index: 2; }
-  .toolbar button { background: #161b22; color: var(--fg); border: 1px solid var(--line); font-size: 13px; padding: 8px 12px; }
+  html { font-size: 17px; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 "Segoe UI", "Helvetica Neue", Arial, sans-serif; height:100vh; display:flex; flex-direction:column; }
+
+  header { display:flex; align-items:center; gap:16px; padding:14px 28px; background:var(--panel); border-bottom:1px solid var(--border); }
+  header h1 { font-size:24px; margin:0; font-weight:700; letter-spacing:.02em; }
+  header h1 span { color:var(--accent); }
+  .spacer { flex:1; }
+  #dot { width:11px; height:11px; border-radius:50%; background:var(--err); box-shadow:0 0 0 3px rgba(192,57,43,.15); }
+  #dot.on { background:#1a6b4a; box-shadow:0 0 0 3px rgba(26,107,74,.18); }
+
+  button, .ghost { border-radius:8px; font:inherit; cursor:pointer; }
+  .primary { background:var(--accent); color:var(--accent-fg); font-weight:600; border:0; padding:12px 20px; font-size:16px; }
+  .primary:disabled { opacity:.5; cursor:wait; }
+  .ghost { background:#fff; color:var(--fg); border:1px solid var(--border); padding:9px 16px; font-size:15px; font-weight:500; }
+  .ghost:hover { border-color:#9aa6b1; background:var(--input); }
+
+  #workspace { flex:1; display:grid; grid-template-columns:440px 1fr; min-height:0; }
+  aside { border-right:1px solid var(--border); padding:28px; display:flex; flex-direction:column; gap:16px; overflow-y:auto; background:var(--panel); }
+
+  label { font-size:13px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--fg); margin-bottom:6px; display:block; }
+  textarea, select, input {
+    background:var(--panel); color:var(--fg); border:1px solid #b7c0c9; border-radius:8px;
+    padding:11px 12px; font:15px/1.4 inherit; width:100%;
+  }
+  textarea:focus, select:focus, input:focus { outline:2px solid var(--accent); outline-offset:0; border-color:var(--accent); }
+  textarea { resize:vertical; min-height:200px; flex:1; }
+  #status { font-size:14px; color:var(--muted); min-height:1.2em; white-space:pre-wrap; font-weight:500; }
+  #error { font-size:14px; color:var(--err); white-space:pre-wrap; font-weight:600; }
+
+  .section { display:flex; flex-direction:column; gap:6px; }
+  .row { display:flex; gap:8px; }
+  .row input, .row select { flex:1; }
+  .row button { width:auto; padding:10px 14px; white-space:nowrap; }
+
+  main { position:relative; }
+  iframe { width:100%; height:100%; border:0; background:#000; }
+  #placeholder { position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); font-size:17px; font-weight:500; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #overlay { position:absolute; inset:0; z-index:5; background:rgba(255,255,255,.8); backdrop-filter:blur(2px); display:none; place-items:center; }
+  #overlayText { color:var(--fg); font-size:16px; font-weight:600; }
+  .toolbar { position:absolute; top:14px; right:14px; display:none; gap:10px; z-index:2; }
+  .toolbar label { text-transform:none; letter-spacing:0; display:inline-flex; align-items:center; gap:7px; font-size:15px; background:#fff; border-color:#b7c0c9; padding:9px 14px; cursor:pointer; box-shadow:0 1px 3px rgba(21,32,43,.08); }
+  #filmstrip { position:absolute; left:14px; top:64px; bottom:14px; width:300px; display:none; overflow-y:auto; z-index:3; background:#fff; border:1px solid var(--border); border-radius:10px; padding:10px; box-shadow:0 2px 8px rgba(21,32,43,.12); }
+
+  /* history */
+  .hrow { display:flex; gap:8px; }
+  .hrow button { flex:1; font-size:14px; padding:9px 10px; }
+  #histDel { color:var(--err); border-color:#e4b6b0; }
+  #histList { padding:8px; font-size:14px; }
+
+  /* settings modal */
+  dialog.sheet { border:1px solid var(--border); border-radius:12px; padding:0; width:min(480px,94vw); background:var(--panel); color:var(--fg); box-shadow:0 8px 32px rgba(21,32,43,.2); }
+  dialog.sheet::backdrop { background:rgba(21,32,43,.45); }
+  .sheet .inner { padding:26px; display:flex; flex-direction:column; gap:14px; max-height:88vh; overflow-y:auto; }
+  .sheet h2 { font-size:19px; font-weight:700; margin:0; padding-bottom:12px; border-bottom:2px solid var(--line); }
+  .sheet .actions { display:flex; gap:10px; justify-content:flex-end; padding:16px 26px; border-top:1px solid var(--line); }
+  .sheet .actions button { padding:10px 20px; font-size:15px; }
+  details summary { cursor:pointer; font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--fg); }
+
+  .card { border:1px solid var(--border); border-radius:8px; padding:8px; margin-bottom:8px; }
+  .card .meta { font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; }
+  .card [data-instruction] { margin-top:6px; width:96%; font-size:13px; padding:5px 8px; }
+  .card .ops { display:flex; gap:4px; margin-top:6px; flex-wrap:wrap; }
+  .card .ops button { background:#fff; color:var(--fg); border:1px solid #b7c0c9; font-size:12px; padding:5px 9px; border-radius:6px; }
 </style>
 </head>
 <body>
-<aside>
+<header>
   <h1>slide<span>gen</span></h1>
-  <details open>
-    <summary style="cursor:pointer; font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:#8b93a1;">provider settings</summary>
-    <div style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">
-      <label style="font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:#8b93a1;">provider url (openai-compatible base)</label>
-      <input id="baseUrl" style="background:#161b22; color:#f2ede4; border:1px solid #2a2f38; border-radius:8px; padding:8px; font:inherit;" placeholder="https://opencode.ai/zen/go/v1">
-      <label style="font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:#8b93a1;">api key</label>
-      <input id="apiKey" type="password" style="background:#161b22; color:#f2ede4; border:1px solid #2a2f38; border-radius:8px; padding:8px; font:inherit;" placeholder="sk-...">
-      <label style="font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:#8b93a1;">custom headers (JSON)</label>
-      <textarea id="headers" style="min-height:64px; background:#161b22; color:#f2ede4; border:1px solid #2a2f38; border-radius:8px; padding:8px; font:12px monospace;" placeholder='{"x-opencode-session":"my-session"}'></textarea>
-      <label style="font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:#8b93a1;">model</label>
-      <div style="display:flex; gap:8px;">
-        <input id="model" list="modelList" style="flex:1; background:#161b22; color:#f2ede4; border:1px solid #2a2f38; border-radius:8px; padding:8px; font:inherit;" placeholder="mimo-v2.5">
+  <div id="dot" title="provider not configured"></div>
+  <div class="spacer"></div>
+  <button class="ghost" id="openSettings">⚙ Settings</button>
+</header>
+
+<div id="workspace">
+  <aside>
+    <div class="section">
+      <label>Design system</label>
+      <div id="preset" role="radiogroup" style="display:flex;flex-direction:column;gap:8px;"></div>
+    </div>
+    <div class="section">
+      <label for="model">Model</label>
+      <div class="row">
+        <input id="model" list="modelList" placeholder="mimo-v2.5">
         <datalist id="modelList"></datalist>
-        <button id="loadModels" style="background:#161b22; color:#f2ede4; border:1px solid #2a2f38; padding:8px 10px; font-size:13px; cursor:pointer;">↻ list</button>
-      </div>
-      <label style="font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:#8b93a1;">search api key (tavily — for research grounding)</label>
-      <input id="searchKey" type="password" data-setting="searchKey" style="background:#161b22; color:#f2ede4; border:1px solid #2a2f38; border-radius:8px; padding:8px; font:inherit;" placeholder="tvly-...">
-    </div>
-  </details>
-  <label for="preset">design system</label>
-  <select id="preset">
-    <option value="swiss">Swiss / analytical</option>
-    <option value="editorial">Warm editorial</option>
-    <option value="dark">Midnight editorial</option>
-  </select>
-  <label for="prompt">brief</label>
-  <textarea id="prompt" placeholder="Paste your full brief here: topic, audience, language, structure, slide count..."></textarea>
-  <button id="go" autocomplete="off">Generate deck</button>
-  <details>
-    <summary style="cursor:pointer; font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:#8b93a1;">history (this browser)</summary>
-    <div style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
-      <select id="histList" style="background:#161b22; color:#f2ede4; border:1px solid #2a2f38; border-radius:8px; padding:6px; font-size:12px;"></select>
-      <div style="display:flex; gap:6px;">
-        <button id="histOpen" style="font-size:12px; padding:6px 10px;">Open</button>
-        <button id="histDel" style="font-size:12px; padding:6px 10px; background:#161b22; color:#f87171; border:1px solid #2a2f38;">Delete item</button>
+        <button class="ghost" id="loadModels">↻ List</button>
       </div>
     </div>
-  </details>
-  <button id="cancel" style="display:none;background:#161b22;color:#f87171;border:1px solid #2a2f38;">✕ cancel</button>
-  <div id="status"></div>
-  <div id="error"></div>
-</aside>
-<main>
-  <div id="overlay" style="display:none;position:absolute;inset:0;z-index:3;display:none;background:rgba(14,17,22,0.75);backdrop-filter:blur(2px);place-items:center;">
-    <div style="text-align:center;">
-      <div style="width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;margin:0 auto 12px;animation:spin 0.8s linear infinite;"></div>
-      <div id="overlayText" style="color:#8b93a1;font-size:13px;">generating…</div>
+    <div class="section" style="flex:1;">
+      <label for="prompt">Brief</label>
+      <textarea id="prompt" placeholder="Topic, audience, language, structure, slide count…"></textarea>
     </div>
-  </div>
-  <div class="toolbar" id="toolbar">
-    <button id="download" style="display:none">Download .html</button>
-    <button id="open" style="display:none">Open full</button>
-    <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#8b93a1;background:#161b22;border:1px solid #2a2f38;border-radius:8px;padding:8px 12px;cursor:pointer;">
-      <input type="checkbox" id="editMode"> edit slides
-    </label>
-  </div>
-  <div id="filmstrip" style="display:none;position:absolute;left:12px;top:60px;bottom:12px;width:300px;overflow-y:auto;z-index:3;background:rgba(14,17,22,0.94);border:1px solid #2a2f38;border-radius:10px;padding:10px;"></div>
-  <iframe id="stage" title="deck preview"></iframe>
-  <div id="placeholder">generative preview will appear here</div>
-</main>
+    <div class="section">
+      <button class="primary" id="go" autocomplete="off">Generate deck</button>
+      <button class="ghost" id="cancel" style="color:var(--err);display:none;">✕ Cancel</button>
+      <div id="status"></div>
+      <div id="error"></div>
+    </div>
+    <details>
+      <summary>History</summary>
+      <div id="histWrap">
+        <select id="histList"></select>
+        <div class="hrow">
+          <button class="ghost" id="histOpen" style="flex:1;font-size:14px;padding:9px;">Open</button>
+          <button class="ghost" id="histDel" style="flex:1;font-size:14px;padding:9px;">Delete</button>
+        </div>
+      </div>
+    </details>
+  </aside>
+
+  <main>
+    <div id="overlay">
+      <div style="text-align:center;">
+        <div style="width:34px;height:34px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;margin:0 auto 12px;animation:spin .8s linear infinite;"></div>
+        <div id="overlayText">generating…</div>
+      </div>
+    </div>
+    <div class="toolbar" id="toolbar">
+      <button class="ghost" id="download" style="display:none">Download .html</button>
+      <button class="ghost" id="open" style="display:none">Open full</button>
+      <label><input type="checkbox" id="editMode"> Edit slides</label>
+    </div>
+    <div id="filmstrip"></div>
+    <iframe id="stage" title="deck preview"></iframe>
+    <div id="placeholder">generative preview will appear here</div>
+  </main>
+</div>
+
+<dialog class="sheet" id="settings">
+  <form method="dialog" style="display:flex;flex-direction:column;height:100%;">
+    <div class="inner">
+      <h2>Credentials</h2>
+      <div class="section">
+        <label for="baseUrl">Provider URL (OpenAI-compatible base)</label>
+        <input id="baseUrl" placeholder="https://opencode.ai/zen/go/v1">
+      </div>
+      <div class="section">
+        <label for="apiKey">API key</label>
+        <input id="apiKey" type="password" placeholder="sk-...">
+      </div>
+      <div class="section">
+        <label for="headers">Custom headers (JSON)</label>
+        <textarea id="headers" style="min-height:64px;font:13px/1.4 monospace;" placeholder='{"x-opencode-session":"my-session"}'></textarea>
+      </div>
+      <div class="section">
+        <label>Default design system</label>
+        <div role="radiogroup" id="presetDefault" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="ghost" type="button" id="closeSettings">Cancel</button>
+      <button class="primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const $ = (id) => document.getElementById(id);
+const PRESETS = [
+  { id: "swiss", name: "Swiss / analytical", bg: "#f5f5f2", fg: "#111", accent: "#0033CC", title: "#111", desc: "Grid, hairlines, huge numbers, Klein blue." },
+  { id: "editorial", name: "Warm editorial", bg: "#F7F3EE", fg: "#2b2620", accent: "#B4562C", title: "#1d1a15", desc: "Paper, serif display, pull-quotes, terracotta." },
+  { id: "dark", name: "Midnight editorial", bg: "#0E1116", fg: "#e8e2d6", accent: "#D9A441", title: "#f4efe6", desc: "Near-black, gold accent, serif headlines." },
+];
+function presetValue(gid) { return document.querySelector(`#${gid} input:checked`)?.value || "swiss"; }
+function setPreset(gid, v) { document.querySelector(`#${gid} input[value="${v}"]`).checked = true; }
+function renderPresetPicker(gid) {
+  const el = $(gid);
+  el.innerHTML = PRESETS.map((p) => `
+    <label style="display:flex;gap:12px;align-items:flex-start;border:2px solid var(--border);border-radius:10px;padding:10px;cursor:pointer;background:#fff;">
+      <input type="radio" name="preset-${gid}" value="${p.id}" style="width:auto;margin-top:22px;accent-color:var(--accent);">
+      <svg width="84" height="52" viewBox="0 0 84 52" style="border-radius:4px;flex-shrink:0;border:1px solid var(--border);" aria-hidden="true">
+        <rect width="84" height="52" fill="${p.bg}"/>
+        <rect x="9" y="9" width="40" height="6" rx="2" fill="${p.title}"/>
+        <rect x="9" y="21" width="30" height="3" rx="1.5" fill="${p.fg}" opacity=".75"/>
+        <rect x="9" y="27" width="34" height="3" rx="1.5" fill="${p.fg}" opacity=".55"/>
+        <rect x="9" y="33" width="26" height="3" rx="1.5" fill="${p.fg}" opacity=".55"/>
+        <circle cx="68" cy="36" r="9" fill="${p.accent}"/>
+      </svg>
+      <span>
+        <strong style="font-size:15px;">${p.name}</strong><br>
+        <span style="font-size:13px;color:var(--muted);">${p.desc}</span>
+      </span>
+    </label>`).join("");
+  setPreset(gid, el.dataset.pick || "swiss");
+}
 const SETTINGS_KEY = "slidegen-settings";
-const fields = ["baseUrl", "apiKey", "headers", "model", "searchKey"];
+const fields = ["baseUrl", "apiKey", "headers", "model"];
+const pick = (gid, v) => { $(gid).dataset.pick = v || "swiss"; renderPresetPicker(gid); };
+pick("preset"); pick("presetDefault");
 try {
   const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
   fields.forEach((f) => { if (saved[f]) $(f).value = saved[f]; });
+  if (saved.presetDefault) { pick("preset", saved.presetDefault); pick("presetDefault", saved.presetDefault); }
   if (!$("baseUrl").value) $("baseUrl").value = "https://opencode.ai/zen/go/v1";
   if (!$("headers").value) $("headers").value = '{"x-opencode-session":"slidegen-web"}';
 } catch {}
 function saveSettings() {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(Object.fromEntries(fields.map((f) => [f, $(f).value]))));
+  const d = Object.fromEntries(fields.map((f) => [f, $(f).value]));
+  d.presetDefault = presetValue("presetDefault");
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(d));
 }
-fields.forEach((f) => $(f).addEventListener("change", saveSettings));
 
-function headersOf() {
-  try { return JSON.parse($("headers").value || "{}"); }
-  catch {
-    $("error").textContent = "custom headers is not valid JSON";
-    throw "bad headers";
-  }
-}
+const settingsDlg = $("settings");
+$("openSettings").addEventListener("click", () => { setPreset("presetDefault", presetValue("preset")); settingsDlg.showModal(); });
+$("closeSettings").addEventListener("click", () => settingsDlg.close());
+settingsDlg.addEventListener("close", () => { setPreset("preset", presetValue("presetDefault")); saveSettings(); paintDot(); });
+fields.forEach((f) => $(f).addEventListener("change", saveSettings));
+function paintDot() { $("dot").classList.toggle("on", !!$("apiKey").value.trim()); $("dot").title = $("apiKey").value.trim() ? "provider configured" : "no api key — open settings"; }
+paintDot();
+
 function providerPayload() {
-  return { baseUrl: $("baseUrl").value.trim(), apiKey: $("apiKey").value.trim(), headers: headersOf() };
+  let headers = {};
+  try { headers = JSON.parse($("headers").value || "{}"); }
+  catch { $("error").textContent = "custom headers is not valid JSON"; }
+  return { baseUrl: $("baseUrl").value.trim(), apiKey: $("apiKey").value.trim(), headers };
 }
 async function fetchJSON(url, payload, signal) {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal });
@@ -121,57 +233,57 @@ async function fetchJSON(url, payload, signal) {
   return data;
 }
 let tick = null;
+const BUSY_DISABLE = ["loadModels", "histOpen", "histDel", "download", "open"];
 function loading(on, text) {
+  BUSY_DISABLE.forEach((id) => ($(id).disabled = on));
+  $("editMode").disabled = on;
   $("overlay").style.display = on ? "grid" : "none";
   if (on) {
-    $("go").disabled = true;
-    $("go").blur();
+    $("go").disabled = true; $("go").blur();
     $("cancel").style.display = "inline-block";
-    const s0 = Date.now();
-    $("overlayText").textContent = (text || "generating…") + " 0s";
-    tick = setInterval(() => $("overlayText").textContent = (text || "generating…") + ` ${Math.round((Date.now() - s0) / 1000)}s`, 1000);
+    const s0 = Date.now(), label = text || "generating";
+    $("overlayText").textContent = label + " 0s";
+    tick = setInterval(() => $("overlayText").textContent = label + ` ${Math.round((Date.now() - s0) / 1000)}s`, 1000);
   } else {
-    clearInterval(tick);
+    clearInterval(tick); tick = null;
     $("go").disabled = false;
     $("cancel").style.display = "none";
   }
 }
 let ctrl = null;
 $("cancel").addEventListener("click", () => { if (ctrl) ctrl.abort(); });
-$("loadModels").addEventListener("click", async () => {
-  try { headersOf(); } catch { return; }
-  loadingModels(true);
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && ctrl) ctrl.abort(); });
+
+async function loadModels() {
+  $("loadModels").disabled = true;
+  $("status").textContent = "loading model list…";
   try {
-    const r = await fetch("/models", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider: providerPayload() }) });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error);
-    $("modelList").innerHTML = data.models.map((m) => `<option value="${m}">`).join("");
-    $("status").textContent = `${data.models.length} models loaded — click the model field`;
+    const d = await fetchJSON("/models", { provider: providerPayload() });
+    $("modelList").innerHTML = d.models.map((m) => `<option value="${m}">`).join("");
+    $("status").textContent = `${d.models.length} models loaded — click the model field`;
     saveSettings();
   } catch (e) {
-    $("error").textContent = String(e.message || e);
+    $("status").textContent = ""; $("error").textContent = String(e.message || e);
   } finally {
-    loadingModels(false);
+    $("loadModels").disabled = false;
   }
-});
-function loadingModels(on) {
-  $("loadModels").disabled = on; $("go").disabled = on;
-  $("status").textContent = on ? "loading model list…" : "";
 }
-window.addEventListener("keydown", (e) => { if (e.key === "Escape" && ctrl) ctrl.abort(); });
+$("loadModels").addEventListener("click", loadModels);
+$("model").addEventListener("click", async () => {
+  if (!$("modelList").options.length) await loadModels();
+  try { $("model").showPicker(); } catch {}
+});
+
 $("go").addEventListener("click", async () => {
-  $("error").textContent = ""; saveSettings();
-  try { headersOf(); } catch { return; }
-  if (!$("apiKey").value.trim()) { $("error").textContent = "api key required"; return; }
+  $("error").textContent = "";   saveSettings(); paintDot();
   ctrl = new AbortController();
-  loadingModels(false); loading(true, "generating");
+  loading(true, "generating");
   try {
     const r = await fetch("/generate", { method: "POST", headers: { "Content-Type": "application/json" },
       signal: ctrl.signal,
       body: JSON.stringify({
         prompt: $("prompt").value,
-        preset: $("preset").value,
+        preset: presetValue("preset"),
         provider: { ...providerPayload(), model: $("model").value.trim() },
       }) });
     if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || r.statusText); }
@@ -190,20 +302,15 @@ $("go").addEventListener("click", async () => {
         const msg = JSON.parse(line);
         if (msg.phase === "progress") {
           $("overlayText").textContent = `generating… ${msg.chars.toLocaleString()} chars · ${msg.seconds}s`;
-        } else if (msg.phase === "error") {
-          errMsg = msg.error;
-        } else if (msg.phase === "done") {
-          html = msg.html;
-        }
+          if (tick) clearInterval(tick);
+        } else if (msg.phase === "error") errMsg = msg.error;
+        else if (msg.phase === "done") html = msg.html;
       }
     }
     if (errMsg && !html) throw new Error(errMsg);
-    lastDeck = html; lastBrief = $("prompt").value; pushHistory(html);
-    $("stage").srcdoc = html;
-    $("placeholder").style.display = "none";
-    $("toolbar").style.display = "flex";
-    $("download").style.display = "inline-block";
-    $("open").style.display = "inline-block";
+    showDeck(html);
+    lastBrief = $("prompt").value;
+    pushHistory(html);
     $("status").textContent = "done — arrows to navigate the deck";
   } catch (e) {
     if (e.name === "AbortError") $("status").textContent = "cancelled";
@@ -212,7 +319,18 @@ $("go").addEventListener("click", async () => {
     loading(false); ctrl = null;
   }
 });
-let lastDeck = null;
+
+let lastDeck = null, lastBrief = "";
+function showDeck(html) {
+  lastDeck = html;
+  $("stage").srcdoc = html;
+  $("placeholder").style.display = "none";
+  $("toolbar").style.display = "flex";
+  $("download").style.display = "inline-block";
+  $("open").style.display = "inline-block";
+  $("filmstrip").style.display = $("editMode").checked ? "block" : "none";
+  refreshStrip();
+}
 $("download").addEventListener("click", () => {
   if (!lastDeck) return;
   const a = document.createElement("a");
@@ -223,22 +341,17 @@ $("open").addEventListener("click", () => {
   if (!lastDeck) { $("error").textContent = "generate or load a deck first"; return; }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([lastDeck], { type: "text/html" }));
-  a.target = "_blank";
-  a.rel = "noopener";
-  a.click();
+  a.target = "_blank"; a.rel = "noopener"; a.click();
 });
-
 
 // ─── history (localStorage, per browser) ─────────────────────────────
 const HISTORY_KEY = "slidegen-history";
 const HISTORY_MAX = 15;
 function loadHistory() { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; } }
-function saveHistory(h) { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); }
 function deckTitle(html) {
   try {
     const d = new DOMParser().parseFromString(html, "text/html");
     return (d.querySelector("section h1,section h2,section h3")?.textContent || "").trim().slice(0, 54)
-      || (d.querySelector("h1,h2,h3")?.textContent || "").trim().slice(0, 54)
       || "(untitled)";
   } catch { return "(untitled)"; }
 }
@@ -246,7 +359,7 @@ function pushHistory(html) {
   if (!html) return;
   const h = loadHistory();
   h.unshift({ ts: Date.now(), title: deckTitle(html), html });
-  saveHistory(h.slice(0, HISTORY_MAX));
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(0, HISTORY_MAX)));
   renderHistory();
 }
 function renderHistory() {
@@ -256,41 +369,28 @@ function renderHistory() {
   $("histList").selectedIndex = -1;
 }
 $("histOpen").addEventListener("click", () => {
-  const i = +$("histList").value;
-  const h = loadHistory();
-  if (!h[i]) { $("error").textContent = "select a history item first"; return; }
-  lastDeck = h[i].html;
+  const item = loadHistory()[+$("histList").value];
+  if (!item) { $("error").textContent = "select a history item first"; return; }
+  showDeck(item.html);
   lastBrief = "";
-  $("stage").srcdoc = lastDeck;
-  $("placeholder").style.display = "none";
-  $("toolbar").style.display = "flex";
-  $("download").style.display = "inline-block";
-  $("open").style.display = "inline-block";
-  $("filmstrip").style.display = $("editMode").checked ? "block" : "none";
-  refreshStrip();
   $("status").textContent = "loaded from history — ✎ fix works here too (brief context empty)";
 });
 $("histDel").addEventListener("click", () => {
   const i = +$("histList").value;
+  if (i < 0) return;
   const h = loadHistory();
-  if (!h[i]) return;
   h.splice(i, 1);
-  saveHistory(h);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
   renderHistory();
 });
 renderHistory();
 
-// ─── slide editing ─────────
 // ─── slide editing ─────────────────────────────────────────────────────
 const STRIP = $("filmstrip");
-const editModeBox = $("editMode");
-const presetSel = $("preset");
-const modelInput = $("model");
-let lastBrief = "";
 
-editModeBox.addEventListener("change", () => {
-  STRIP.style.display = editModeBox.checked ? "block" : "none";
-  if (editModeBox.checked) refreshStrip();
+$("editMode").addEventListener("change", () => {
+  STRIP.style.display = $("editMode").checked ? "block" : "none";
+  if ($("editMode").checked) refreshStrip();
 });
 
 function parseSlides() {
@@ -303,19 +403,15 @@ function saveDeckFromDoc(doc) {
   lastDeck = "<!doctype html>\n" + doc.documentElement.outerHTML;
   $("stage").srcdoc = lastDeck;
   refreshStrip();
-  $("status").textContent = "";
+  fetch("/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ html: lastDeck }) }).catch(() => {});
 }
 
-async function callEdit(slides, index, action, instruction) {
-  const r = await fetch("/edit", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      prompt: lastBrief, preset: presetSel.value,
-      provider: { ...providerPayload(), model: modelInput.value.trim() },
-      slides, index, action, instruction,
-    }) });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.error || r.statusText);
-  return d.section;
+function callEdit(slides, index, action, instruction, signal) {
+  return fetchJSON("/edit", {
+    prompt: lastBrief, preset: presetValue("preset"),
+    provider: { ...providerPayload(), model: $("model").value.trim() },
+    slides, index, action, instruction,
+  }, signal).then((d) => d.section);
 }
 
 function refreshStrip() {
@@ -325,24 +421,23 @@ function refreshStrip() {
   secs.forEach((s, i) => {
     const title = (s.querySelector("h1,h2,h3,h4,[class*=title]")?.textContent || "").trim().slice(0, 38);
     const card = document.createElement("div");
-    card.style.cssText = "border:1px solid #2a2f38;border-radius:8px;padding:6px;margin-bottom:8px;";
+    card.className = "card";
     card.innerHTML = `
-      <div style="font-size:11px;color:#8b93a1;">slide ${i + 1} · ${title}</div>
+      <div class="meta">slide ${i + 1} · ${title}</div>
       <iframe class="thumb" style="width:100%;aspect-ratio:16/9;border:0;background:#fff;pointer-events:none;" title="thumb ${i + 1}"></iframe>
-      <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;">
-        <button data-act="regen" style="font-size:11px;padding:4px 8px;">✎ fix</button>
-        <button data-act="ins_before" style="font-size:11px;padding:4px 8px;">＋ before</button>
-        <button data-act="ins_after" style="font-size:11px;padding:4px 8px;">＋ after</button>
-        <button data-act="del" style="font-size:11px;padding:4px 8px;">🗑</button>
-        <button data-act="up" style="font-size:11px;padding:4px 8px;">↑</button>
-        <button data-act="down" style="font-size:11px;padding:4px 8px;">↓</button>
+      <div class="ops">
+        <button data-act="regen">✎ fix</button>
+        <button data-act="ins_before">＋ before</button>
+        <button data-act="ins_after">＋ after</button>
+        <button data-act="del">🗑</button>
+        <button data-act="up">↑</button>
+        <button data-act="down">↓</button>
       </div>
-      <input data-instruction placeholder="instruction for fix / insert…" style="margin-top:4px;width:96%;font-size:12px;background:#161b22;color:#f2ede4;border:1px solid #2a2f38;border-radius:6px;padding:4px 8px;">`;
+      <input data-instruction placeholder="instruction for fix / insert…">`;
     STRIP.appendChild(card);
     const thumbDoc = doc.documentElement.cloneNode(true);
     const all = [...thumbDoc.querySelectorAll("section")];
-    let kept = 0;
-    all.forEach((n, j) => { if (j === i) kept++; else n.remove(); });
+    all.forEach((n, j) => { if (j !== i) n.remove(); });
     [...thumbDoc.querySelectorAll("script")].forEach((n) => n.remove());
     card.querySelector(".thumb").srcdoc = `<!doctype html>${thumbDoc.outerHTML}`;
     card.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => stripAction(card, i, b.dataset.act)));
@@ -369,11 +464,12 @@ async function stripAction(card, i, act) {
   }
 
   if (!instruction) { $("error").textContent = "type an instruction for this slide first"; return; }
-  const btns = card.querySelectorAll("button");
-  btns.forEach((b) => (b.disabled = true));
-  $("status").textContent = "editing slide…";
+  ctrl = new AbortController();
+  STRIP.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
+  $("go").disabled = true;
+  loading(true, `editing slide ${i + 1}`);
   try {
-    const section = await callEdit(secs.map((s) => s.outerHTML), i, act, instruction);
+    const section = await callEdit(secs.map((s) => s.outerHTML), i, act, instruction, ctrl.signal);
     const tpl = document.createElement("template");
     tpl.innerHTML = section;
     const clean = tpl.content.querySelector("section");
@@ -384,10 +480,11 @@ async function stripAction(card, i, act) {
     saveDeckFromDoc(doc);
     $("status").textContent = "slide updated";
   } catch (e) {
-    $("status").textContent = "";
-    $("error").textContent = e.message || String(e);
+    $("status").textContent = e.name === "AbortError" ? "cancelled" : "";
+    if (e.name !== "AbortError") $("error").textContent = e.message || String(e);
   } finally {
-    btns.forEach((b) => (b.disabled = false));
+    loading(false); ctrl = null;
+    STRIP.querySelectorAll("button, input").forEach((el) => (el.disabled = false));
   }
 }
 </script>
