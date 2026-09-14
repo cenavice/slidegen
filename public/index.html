@@ -50,15 +50,18 @@
   @keyframes spin { to { transform:rotate(360deg); } }
   #overlay { position:absolute; inset:0; z-index:5; background:rgba(255,255,255,.8); backdrop-filter:blur(2px); display:none; place-items:center; }
   #overlayText { color:var(--fg); font-size:16px; font-weight:600; }
-  .toolbar { position:absolute; top:14px; right:14px; display:none; gap:10px; z-index:2; }
-  .toolbar label { text-transform:none; letter-spacing:0; display:inline-flex; align-items:center; gap:7px; font-size:15px; background:#fff; border-color:#b7c0c9; padding:9px 14px; cursor:pointer; box-shadow:0 1px 3px rgba(21,32,43,.08); }
+  .toolbar { position:absolute; top:14px; right:14px; display:none; gap:10px; z-index:2; align-items:center; }
+  .toolbar > * { font-size:13px; padding:9px 12px; line-height:1.3; }
+  .toolbar label { text-transform:none; letter-spacing:0; display:inline-flex; align-items:center; gap:7px; background:#fff; border:1px solid #b7c0c9; border-radius:8px; cursor:pointer; box-shadow:0 1px 3px rgba(21,32,43,.08); margin:0; }
+  .toolbar label input[type="checkbox"] { width:16px; height:16px; padding:0; margin:0; accent-color:var(--accent); }
   #filmstrip { position:absolute; left:14px; top:64px; bottom:14px; width:300px; display:none; overflow-y:auto; z-index:3; background:#fff; border:1px solid var(--border); border-radius:10px; padding:10px; box-shadow:0 2px 8px rgba(21,32,43,.12); }
 
   /* history */
-  .hrow { display:flex; gap:8px; }
-  .hrow button { flex:1; font-size:14px; padding:9px 10px; }
+  #histWrap { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
+  #histList { width:100%; padding:10px; font-size:14px; }
+  .hrow { display:flex; gap:10px; }
+  .hrow button { flex:1; font-size:14px; padding:10px; }
   #histDel { color:var(--err); border-color:#e4b6b0; }
-  #histList { padding:8px; font-size:14px; }
 
   /* settings modal */
   dialog.sheet { border:1px solid var(--border); border-radius:12px; padding:0; width:min(480px,94vw); background:var(--panel); color:var(--fg); box-shadow:0 8px 32px rgba(21,32,43,.2); }
@@ -69,11 +72,32 @@
   .sheet .actions button { padding:10px 20px; font-size:15px; }
   details summary { cursor:pointer; font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--fg); }
 
-  .card { border:1px solid var(--border); border-radius:8px; padding:8px; margin-bottom:8px; }
-  .card .meta { font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; }
-  .card [data-instruction] { margin-top:6px; width:96%; font-size:13px; padding:5px 8px; }
-  .card .ops { display:flex; gap:4px; margin-top:6px; flex-wrap:wrap; }
-  .card .ops button { background:#fff; color:var(--fg); border:1px solid #b7c0c9; font-size:12px; padding:5px 9px; border-radius:6px; }
+  .card { border:1px solid var(--border); border-radius:10px; padding:10px; margin-bottom:12px; box-shadow:0 1px 3px rgba(21,32,43,.06); }
+  .card .meta { font-size:12px; font-weight:600; color:var(--muted); margin-bottom:8px; }
+  .card .ops { display:flex; gap:6px; margin-top:8px; }
+  .card .ops ~ .fix, .card > .fix { display:block; width:100%; margin-top:6px; background:var(--accent); color:var(--accent-fg); font-weight:600; font-size:13px; padding:9px 10px; border-radius:8px; border:0; cursor:pointer; white-space:nowrap; overflow:hidden; }
+  .card .thumb { border-radius:6px; width:100%!important; aspect-ratio:16/9; display:block; }
+  #filmstrip { width:340px; }
+  .card .ops { display:grid; grid-template-columns:34px 34px 34px 34px 34px 34px; gap:6px; margin-top:8px; }
+  .card .ops .fix { grid-column:1 / -1; background:var(--accent); color:var(--accent-fg); font-weight:600; font-size:13px; padding:8px 10px; border-radius:8px; border:0; cursor:pointer; white-space:nowrap; overflow:hidden; }
+  .card .ops .fix:disabled { opacity:.5; cursor:wait; }
+  .card .ops .icon { width:34px; height:34px; padding:0; background:#fff; color:var(--fg); border:1px solid #b7c0c9; font-size:14px; border-radius:8px; cursor:pointer; }
+  .card .ops .icon:disabled { opacity:.4; cursor:wait; }
+
+  /* edit modal */
+  dialog#editDlg { border:1px solid var(--border); border-radius:12px; padding:0; width:min(600px,94vw); background:var(--panel); color:var(--fg); box-shadow:0 8px 32px rgba(21,32,43,.2); }
+  #editDlg::backdrop { background:rgba(21,32,43,.45); }
+  #editDlg .body { padding:22px 24px; display:flex; flex-direction:column; gap:14px; }
+  #editDlg h2 { font-size:19px; font-weight:700; margin:0; }
+  #editDlg .pvwrap { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  #editDlg .pv { border:1px solid var(--border); border-radius:8px; overflow:hidden; display:none; }
+  #editDlg .pv .tag { font-size:12px; font-weight:600; color:var(--muted); padding:6px 10px; background:var(--input); }
+  #editDlg .pv iframe { width:100%; aspect-ratio:16/9; border:0; background:#fff; display:block; pointer-events:none; }
+  #editDlg textarea { min-height:96px; }
+  #editDlg .acts { display:flex; gap:10px; justify-content:flex-end; }
+  #editDone { text-align:center; padding:6px 0; }
+  #editDone .big { font-size:20px; font-weight:700; color:var(--accent); margin-bottom:8px; }
+  #editDone iframe { width:100%; aspect-ratio:16/9; border:1px solid var(--border); border-radius:8px; background:#fff; display:block; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -113,8 +137,8 @@
       <div id="histWrap">
         <select id="histList"></select>
         <div class="hrow">
-          <button class="ghost" id="histOpen" style="flex:1;font-size:14px;padding:9px;">Open</button>
-          <button class="ghost" id="histDel" style="flex:1;font-size:14px;padding:9px;">Delete</button>
+          <button class="ghost" id="histOpen">Open</button>
+          <button class="ghost" id="histDel">Delete</button>
         </div>
       </div>
     </details>
@@ -133,7 +157,7 @@
       <label><input type="checkbox" id="editMode"> Edit slides</label>
     </div>
     <div id="filmstrip"></div>
-    <iframe id="stage" title="deck preview"></iframe>
+    <iframe id="stage" title="deck preview" sandbox="allow-scripts"></iframe>
     <div id="placeholder">generative preview will appear here</div>
   </main>
 </div>
@@ -162,6 +186,37 @@
     <div class="actions">
       <button class="ghost" type="button" id="closeSettings">Cancel</button>
       <button class="primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="editDlg">
+  <form method="dialog" style="display:flex;flex-direction:column;">
+    <div class="body">
+      <h2 id="editTitle">Fix slide 1</h2>
+      <div id="editPreview" class="pvwrap">
+        <div class="pv" id="pvOld" style="display:block;">
+          <div class="tag">current</div>
+          <iframe id="pvOldFrame" title="current slide"></iframe>
+        </div>
+        <div class="pv" id="pvNew">
+          <div class="tag">preview of updated deck</div>
+          <iframe id="pvNewFrame" title="updated deck"></iframe>
+        </div>
+      </div>
+      <textarea id="editText" placeholder="What should change on this slide?"></textarea>
+      <div class="acts" id="editActs">
+        <button class="ghost" type="button" id="editClose">Cancel</button>
+        <button class="primary" type="submit" id="editGo">Update slide</button>
+      </div>
+      <div id="editDone" style="display:none;">
+        <div class="big">Slide updated ✓</div>
+        <iframe id="editDoneFrame" title="updated slide"></iframe>
+        <div class="acts" style="margin-top:12px;">
+          <button class="ghost" type="button" id="editAgain" style="flex:1;">More edits</button>
+          <button class="primary" type="button" id="editCloseDone" style="flex:1;">Done</button>
+        </div>
+      </div>
     </div>
   </form>
 </dialog>
@@ -259,7 +314,8 @@ async function loadModels() {
   $("status").textContent = "loading model list…";
   try {
     const d = await fetchJSON("/models", { provider: providerPayload() });
-    $("modelList").innerHTML = d.models.map((m) => `<option value="${m}">`).join("");
+    const esc = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    $("modelList").innerHTML = d.models.map((m) => `<option value="${esc(String(m))}">`).join("");
     $("status").textContent = `${d.models.length} models loaded — click the model field`;
     saveSettings();
   } catch (e) {
@@ -290,7 +346,7 @@ $("go").addEventListener("click", async () => {
     // NDJSON progress stream: {phase:"progress",chars,seconds} … {phase:"done",html} | {phase:"error",error}
     const reader = r.body.getReader();
     const dec = new TextDecoder();
-    let buf = "", html = "", errMsg = null;
+    let buf = "", html = "", errMsg = null, warns = [];
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -304,6 +360,7 @@ $("go").addEventListener("click", async () => {
           $("overlayText").textContent = `generating… ${msg.chars.toLocaleString()} chars · ${msg.seconds}s`;
           if (tick) clearInterval(tick);
         } else if (msg.phase === "error") errMsg = msg.error;
+        else if (msg.phase === "warn") warns = msg.issues || [];
         else if (msg.phase === "done") html = msg.html;
       }
     }
@@ -311,7 +368,9 @@ $("go").addEventListener("click", async () => {
     showDeck(html);
     lastBrief = $("prompt").value;
     pushHistory(html);
-    $("status").textContent = "done — arrows to navigate the deck";
+    $("status").textContent = warns.length
+      ? `done — ⚠ ${warns.map((w) => `slide ${w.slide}: ${w.msg}`).join(" · ")}`.slice(0, 220)
+      : "done — arrows to navigate the deck";
   } catch (e) {
     if (e.name === "AbortError") $("status").textContent = "cancelled";
     else $("error").textContent = (e.name === "TimeoutError" ? "connection timed out — provider too slow or unreachable. Try a smaller brief, faster model, or cancel & retry." : (e.message || "network error"));
@@ -396,7 +455,7 @@ $("editMode").addEventListener("change", () => {
 function parseSlides() {
   const doc = new DOMParser().parseFromString(lastDeck, "text/html");
   const secs = [...doc.querySelectorAll("section")].filter((s) => (s.className || "").includes("slide"));
-  return { doc, secs };
+  return { doc, secs, style: [...doc.querySelectorAll("style")].map((s) => s.textContent).join("\\n") };
 }
 
 function saveDeckFromDoc(doc) {
@@ -406,11 +465,50 @@ function saveDeckFromDoc(doc) {
   fetch("/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ html: lastDeck }) }).catch(() => {});
 }
 
-function callEdit(slides, index, action, instruction, signal) {
+$("editText").style.display = "none";
+$("editClose").addEventListener("click", () => { editCtx = null; editDlg.close(); });
+$("editCloseDone").addEventListener("click", () => { editCtx = null; editDlg.close(); });
+$("editAgain").addEventListener("click", () => { if (editCtx) { editDlg.close(); openEditDlg("regen", editCtx.act.startsWith("ins") ? (editCtx.act === "ins_before" ? editCtx.i : editCtx.i + 1) : editCtx.i); } });
+
+async function performEdit(i, act, instruction) {
+  const { doc, secs, style } = parseSlides();
+  ctrl = new AbortController();
+  STRIP.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
+  $("go").disabled = true;
+  try {
+    const section = await callEdit(secs.map((s) => s.outerHTML), i, act, instruction, ctrl.signal, style);
+    const tpl = document.createElement("template");
+    tpl.innerHTML = section;
+    const clean = tpl.content.querySelector("section");
+    if (!clean) throw new Error("no <section> in model output. Raw: " + section.slice(0, 200));
+    const slideStyle = tpl.content.querySelector("style");
+    if (slideStyle) clean.prepend(slideStyle);
+    if (act === "regen") secs[i].replaceWith(clean);
+    else if (act === "ins_before") secs[i].before(clean);
+    else secs[i].after(clean);
+    saveDeckFromDoc(doc);
+    pvShot(doc.documentElement.outerHTML, act === "regen" ? i : (act === "ins_before" ? i : i + 1), "pvNewFrame");
+    $("pvOld").style.display = editCtx.act === "regen" ? "block" : "none";
+    $("pvNew").style.display = "block";
+    $("editDone").style.display = "block";
+    $("editPreview").style.display = "grid";
+    $("editActs").style.display = "none";
+    $("editText").style.display = "none";
+    pushHistory(lastDeck);
+    $("status").textContent = "slide updated";
+  } catch (e) {
+    $("status").textContent = e.name === "AbortError" ? "cancelled" : "";
+    if (e.name !== "AbortError") $("error").textContent = e.message || String(e);
+    editDlg.close();
+  } finally {
+    STRIP.querySelectorAll("button, input").forEach((el) => (el.disabled = false));
+  }
+}
+async function callEdit(slides, index, action, instruction, signal, style) {
   return fetchJSON("/edit", {
     prompt: lastBrief, preset: presetValue("preset"),
     provider: { ...providerPayload(), model: $("model").value.trim() },
-    slides, index, action, instruction,
+    slides, index, action, instruction, style,
   }, signal).then((d) => d.section);
 }
 
@@ -423,70 +521,85 @@ function refreshStrip() {
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
-      <div class="meta">slide ${i + 1} · ${title}</div>
-      <iframe class="thumb" style="width:100%;aspect-ratio:16/9;border:0;background:#fff;pointer-events:none;" title="thumb ${i + 1}"></iframe>
+      <div class="meta">slide ${i + 1} · ${title || "(untitled)"}</div>
+      <iframe class="thumb" sandbox="allow-scripts" style="width:100%;aspect-ratio:16/9;border:0;background:#fff;pointer-events:none;" title="thumb ${i + 1}"></iframe>
       <div class="ops">
-        <button data-act="regen">✎ fix</button>
-        <button data-act="ins_before">＋ before</button>
-        <button data-act="ins_after">＋ after</button>
-        <button data-act="del">🗑</button>
-        <button data-act="up">↑</button>
-        <button data-act="down">↓</button>
+        <button class="icon" data-act="ins_before" title="Insert new slide before">＋</button>
+        <button class="icon" data-act="ins_after" title="Insert new slide after">＋＋</button>
+        <button class="icon" data-act="up" title="Move up">↑</button>
+        <button class="icon" data-act="down" title="Move down">↓</button>
+        <button class="icon" data-act="del" title="Delete slide">🗑</button>
       </div>
-      <input data-instruction placeholder="instruction for fix / insert…">`;
+      <button class="fix" data-act="regen">✎ Fix this slide</button>`;
     STRIP.appendChild(card);
     const thumbDoc = doc.documentElement.cloneNode(true);
     const all = [...thumbDoc.querySelectorAll("section")];
     all.forEach((n, j) => { if (j !== i) n.remove(); });
     [...thumbDoc.querySelectorAll("script")].forEach((n) => n.remove());
     card.querySelector(".thumb").srcdoc = `<!doctype html>${thumbDoc.outerHTML}`;
-    card.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => stripAction(card, i, b.dataset.act)));
+    card.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => stripAction(b.dataset.act, i)));
   });
 }
 
-async function stripAction(card, i, act) {
-  const instruction = card.querySelector("input[data-instruction]").value.trim();
-  const { doc, secs } = parseSlides();
-
+function stripAction(act, i) {
   if (act === "del") {
     if (!confirm(`Delete slide ${i + 1}?`)) return;
+    const { doc, secs } = parseSlides();
     secs[i].remove();
-    return saveDeckFromDoc(doc);
+    saveDeckFromDoc(doc);
+    pushHistory(lastDeck);
+    return;
   }
   if (act === "up" || act === "down") {
+    const { doc, secs } = parseSlides();
     const j = act === "up" ? i - 1 : i + 1;
     if (j < 0 || j >= secs.length) return;
     const order = secs.map((s) => s.cloneNode(true));
     const moved = order.splice(i, 1)[0];
     order.splice(j, 0, moved);
     secs[0].parentNode.replaceChildren(...order);
-    return saveDeckFromDoc(doc);
-  }
-
-  if (!instruction) { $("error").textContent = "type an instruction for this slide first"; return; }
-  ctrl = new AbortController();
-  STRIP.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
-  $("go").disabled = true;
-  loading(true, `editing slide ${i + 1}`);
-  try {
-    const section = await callEdit(secs.map((s) => s.outerHTML), i, act, instruction, ctrl.signal);
-    const tpl = document.createElement("template");
-    tpl.innerHTML = section;
-    const clean = tpl.content.querySelector("section");
-    if (!clean) throw new Error("no <section> in model output. Raw: " + section.slice(0, 200));
-    if (act === "regen") secs[i].replaceWith(clean);
-    else if (act === "ins_before") secs[i].before(clean);
-    else secs[i].after(clean);
     saveDeckFromDoc(doc);
-    $("status").textContent = "slide updated";
-  } catch (e) {
-    $("status").textContent = e.name === "AbortError" ? "cancelled" : "";
-    if (e.name !== "AbortError") $("error").textContent = e.message || String(e);
-  } finally {
-    loading(false); ctrl = null;
-    STRIP.querySelectorAll("button, input").forEach((el) => (el.disabled = false));
+    pushHistory(lastDeck);
+    return;
   }
+  openEditDlg(act, i);
 }
+
+// ── edit modal ──
+let editCtx = null; // { i, act, card }
+const editDlg = $("editDlg");
+function pvShot(html, i, frameId) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const all = [...doc.querySelectorAll("section")];
+  all.forEach((n, j) => { if (j !== i) n.remove(); });
+  [...doc.querySelectorAll("script")].forEach((n) => n.remove());
+  $(frameId).srcdoc = "<!doctype html>" + doc.documentElement.outerHTML;
+}
+function openEditDlg(act, i) {
+  if (!lastDeck) { $("error").textContent = "generate or load a deck first"; return; }
+  editCtx = { act, i };
+  const { doc } = parseSlides();
+  $("editTitle").textContent = act === "regen" ? `Fix slide ${i + 1}` : `Insert slide ${act === "ins_before" ? "before" : "after"} slide ${i + 1}`;
+  $("editGo").textContent = act === "regen" ? "Update slide" : "Create slide";
+  pvShot(doc.documentElement.outerHTML, i, "pvOldFrame");
+  $("pvOld").style.display = "block";
+  $("pvNew").style.display = "none";
+  $("editText").value = "";
+  $("editText").style.display = "block";
+  $("editDone").style.display = "none";
+  $("editPreview").style.display = "grid";
+  $("editActs").style.display = "flex";
+  editDlg.showModal();
+}
+editDlg.querySelector("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!editCtx || editCtx.busy) return;
+  const instruction = $("editText").value.trim();
+  if (!instruction) { $("editText").focus(); return; }
+  editCtx.busy = true;
+  $("editGo").disabled = true;
+  performEdit(editCtx.i, editCtx.act, instruction).finally(() => { editCtx.busy = false; $("editGo").disabled = false; });
+});
 </script>
 </body>
 </html>

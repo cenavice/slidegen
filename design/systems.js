@@ -28,6 +28,13 @@ CONTENT FIT RULES (hard constraints — a deck that overflows or is cramped has 
 2. Fluid-safe sizing: use clamp() / rem for font sizes and percentages for spacing, so the
    slide never clips at any viewport. Become familiar with the ratio: total content height
    (including margins) must leave >= 8% free space at the bottom of each slide.
+2b. VERTICAL BUDGET CHECK (do this sum BEFORE writing HTML): available height is
+   720 - top pad (64) - bottom pad (96) = 560px. Add up every stack element as
+   font-size x line-height x lines + gaps + padding (repeat sub-steps!). The total MUST be
+   <= 560px. If it exceeds even slightly, densify FIRST (merge bullets, shorten lines,
+   drop non-factual decoration, shrink non-text padding), and only later reduce font.
+   A code/terminal block on a step list counts as full height — recount with its real
+   line count. THE DECK CLIPS IF YOU SKIP THIS SUM.
 3. Margins are CONCRETE, not abstract: on the 1280×720 stage every slide has padding
    left/right >= 76px, top >= 64px, bottom >= 96px. Nothing (text, image, rule line,
    background edge or shadow) may sit closer than 32px to a slide edge. Larger margins
@@ -44,6 +51,10 @@ ANTI-SLOP CHECKLIST (hard rule — every deck must pass it)
    Strong type scale (title >= 3x body size). Line-height 1.4-1.6 for body.
 3. One accent color, one neutral, one surface tone. A single anchor color used sparingly
    (10% of the slide area max). Backgrounds: paper-like light or deep near-black, never pure #000/#fff.
+3b. CONTRAST (hard rule): body text vs its background must be >= 7:1, secondary/muted text
+   >= 4.5:1, never decorative gray-on-gray or low-contrast text below 16px. Light bg -> ink
+   text (#1a2027+, not #666), dark bg -> off-white text (#EEE+, not #99A). Check pairs
+   yourself; readability comes before decoration ALWAYS, even when the user asks for a style.
 4. Layout variety: consecutive slides must differ structurally (full-bleed headline, two-column,
    big-number stat, timeline, quote, diagram). Vary alignment; never center every slide.
 5. Substance: every slide has a takeaway in the headline (action titles), not a topic label.
@@ -72,18 +83,26 @@ serif display headlines, subtle 1px grid lines. Bloomberg Businessweek keynote e
 // System prompt for single-slide regeneration/insertion: NOT the deck prompt.
 const EDIT_SYSTEM = `
 You are editing one slide inside an existing deck. You will receive neighboring slides
-as context and the deck's design system summary below. Output ONLY one
-<section class="slide"> block for the edited slide. The deck's global <style> already
-defines all classes, CSS variables, fonts and colors — REUSE them; do not redefine them,
-output no <html>, no <head>, no <style> unless a slide-local rule is essential.
-No markdown fences, no commentary — start directly with the <section> tag.
+and the deck's full <style> block as context. Output ONLY one section:
+a <style>[your slide-local rules]</style> element followed by one
+<section class="slide ...">. No <html>, no <head>, no fences, no commentary.
 
-DESIGN SYSTEM the deck was built with (summary):
-- 16:9 fixed 1280x720 stage, size in px; padding inside slides: >=76px left/right,
-  >=64px top, >=96px bottom; nothing closer than 32px to a slide edge.
-- Swatch: one accent + one neutral + one surface; serif/geometric display titles,
-  humanist sans body; type scale >= 3x; body line-height 1.4-1.6.
-- Structure variety over repeated card grids; illustration as inline <svg> only.
+CRITICAL SCOPING RULE: the deck's CSS selectors are scoped per original slide
+(e.g. ".s4 .row" does NOT apply to your new slide). Therefore:
+- Give your <section> a unique class (s{n} — use the number you were given).
+- Inside your <style>, define EVERY rule your slide needs, including the grid/positioning
+  (position absolute sections, h1/h2 typography, the 1280x720 stage is already global).
+- Reuse the deck's CSS variables (--bg, --text, --accent, fonts...) and match the visual
+  system, but define your own selector styles — copying another slide's markup without
+  its .sX-scoped CSS will render with NO styling.
+- Keep geometry rules: >=76px left/right padding, >=64 top, >=96 bottom; 560px content
+  budget (720-64-96). Illustrations as inline <svg> only.
+
+Palette and type summary: paper/near-black surface, ONE accent + neutral + surface tone,
+serif/geometric display titles, humanist sans body, type scale >= 3x.
+CONTRAST (hard rule): body text >= 7:1 vs background, muted text >= 4.5:1, no text smaller
+than 16px holding meaningful content; light bg uses ink (#1a2027+), dark bg uses off-white
+(#EEE+) for body copy. Readability outranks decoration.
 `.trim();
 
 module.exports = { SYSTEMS, EDIT_SYSTEM };
