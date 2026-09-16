@@ -1,4 +1,6 @@
+.opencode/
 node_modules/
 output/
+.env
 *.log
 dist/
