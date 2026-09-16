@@ -43,6 +43,15 @@
   .row { display:flex; gap:8px; }
   .row input, .row select { flex:1; }
   .row button { width:auto; padding:10px 14px; white-space:nowrap; }
+  .model-menu {
+    position:absolute; top:100%; left:0; right:0; z-index:10;
+    max-height:240px; overflow-y:auto; margin-top:2px;
+    background:var(--panel); border:1px solid #b7c0c9; border-radius:8px;
+    box-shadow:0 4px 12px rgba(20,35,50,.12);
+  }
+  .model-menu:empty { display:none; }
+  .model-menu .model-option { padding:8px 12px; font-size:14px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .model-menu .model-option:hover, .model-menu .model-option.active { background:var(--accent); color:var(--accent-fg); }
 
   main { position:relative; }
   iframe { width:100%; height:100%; border:0; background:#000; }
@@ -116,10 +125,11 @@
     </div>
     <div class="section">
       <label for="model">Model</label>
-      <div class="row">
-        <input id="model" list="modelList" placeholder="mimo-v2.5">
-        <datalist id="modelList"></datalist>
-        <button class="ghost" id="loadModels">↻ List</button>
+      <div class="row" style="position:relative;">
+        <input id="model" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
+        <button class="ghost" id="loadModels" title="Load the model list from your provider">↻</button>
+        <!-- Dropdown menu — populated from POST /models, filtered by what you type. -->
+        <div id="modelMenu" class="model-menu" hidden></div>
       </div>
     </div>
     <div class="section" style="flex:1;">
@@ -153,6 +163,7 @@
     </div>
     <div class="toolbar" id="toolbar">
       <button class="ghost" id="download" style="display:none">Download .html</button>
+      <button class="ghost" id="pdf" style="display:none">Download PDF</button>
       <button class="ghost" id="open" style="display:none">Open full</button>
       <label><input type="checkbox" id="editMode"> Edit slides</label>
     </div>
@@ -168,7 +179,7 @@
       <h2>Credentials</h2>
       <div class="section">
         <label for="baseUrl">Provider URL (OpenAI-compatible base)</label>
-        <input id="baseUrl" placeholder="https://opencode.ai/zen/go/v1">
+        <input id="baseUrl" placeholder="https://api.openai.com/v1">
       </div>
       <div class="section">
         <label for="apiKey">API key</label>
@@ -176,7 +187,7 @@
       </div>
       <div class="section">
         <label for="headers">Custom headers (JSON)</label>
-        <textarea id="headers" style="min-height:64px;font:13px/1.4 monospace;" placeholder='{"x-opencode-session":"my-session"}'></textarea>
+        <textarea id="headers" style="min-height:64px;font:13px/1.4 monospace;" placeholder='{"x-api-version":"2024-01"}'></textarea>
       </div>
       <div class="section">
         <label>Default design system</label>
@@ -258,8 +269,8 @@ try {
   const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
   fields.forEach((f) => { if (saved[f]) $(f).value = saved[f]; });
   if (saved.presetDefault) { pick("preset", saved.presetDefault); pick("presetDefault", saved.presetDefault); }
-  if (!$("baseUrl").value) $("baseUrl").value = "https://opencode.ai/zen/go/v1";
-  if (!$("headers").value) $("headers").value = '{"x-opencode-session":"slidegen-web"}';
+  if (!$("baseUrl").value) $("baseUrl").value = "https://api.openai.com/v1";
+  // No default custom headers — most OpenAI-compatible endpoints only need the API key.
 } catch {}
 function saveSettings() {
   const d = Object.fromEntries(fields.map((f) => [f, $(f).value]));
@@ -288,7 +299,7 @@ async function fetchJSON(url, payload, signal) {
   return data;
 }
 let tick = null;
-const BUSY_DISABLE = ["loadModels", "histOpen", "histDel", "download", "open"];
+const BUSY_DISABLE = ["loadModels", "histOpen", "histDel", "download", "pdf", "open"];
 function loading(on, text) {
   BUSY_DISABLE.forEach((id) => ($(id).disabled = on));
   $("editMode").disabled = on;
@@ -309,25 +320,77 @@ let ctrl = null;
 $("cancel").addEventListener("click", () => { if (ctrl) ctrl.abort(); });
 window.addEventListener("keydown", (e) => { if (e.key === "Escape" && ctrl) ctrl.abort(); });
 
+// ─── model picker: a small combobox (type to search the provider's list, or type any name) ───
+let modelNames = [];
+let modelHighlight = -1; // keyboard-selected option index, -1 = none
+
+// Fetch the model list from the provider and open the dropdown.
 async function loadModels() {
   $("loadModels").disabled = true;
   $("status").textContent = "loading model list…";
   try {
     const d = await fetchJSON("/models", { provider: providerPayload() });
-    const esc = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-    $("modelList").innerHTML = d.models.map((m) => `<option value="${esc(String(m))}">`).join("");
-    $("status").textContent = `${d.models.length} models loaded — click the model field`;
+    modelNames = d.models.map(String);
+    $("status").textContent = `${d.models.length} models loaded`;
     saveSettings();
+    renderModelMenu($("model").value);
   } catch (e) {
     $("status").textContent = ""; $("error").textContent = String(e.message || e);
   } finally {
     $("loadModels").disabled = false;
   }
 }
-$("loadModels").addEventListener("click", loadModels);
-$("model").addEventListener("click", async () => {
-  if (!$("modelList").options.length) await loadModels();
-  try { $("model").showPicker(); } catch {}
+
+// Rebuild the dropdown's options, showing only models matching the typed prefix.
+function renderModelMenu(filterText) {
+  modelHighlight = -1;
+  const query = filterText.toLowerCase();
+  const matches = modelNames.filter((name) => name.toLowerCase().includes(query));
+  const picked = $("model").value;
+  $("modelMenu").innerHTML = matches.map((name) =>
+    `<div class="model-option${name === picked ? " active" : ""}" data-value="${name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}">${name.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>`
+  ).join("");
+  $("modelMenu").hidden = matches.length === 0;
+}
+
+// Choosing an option: fill the field, close the menu.
+function pickModel(name) {
+  $("model").value = name;
+  $("modelMenu").hidden = true;
+  saveSettings();
+}
+
+$("modelMenu").addEventListener("mousedown", (e) => {
+  // mousedown (not click) so the input doesn't blur/close the menu first
+  const option = e.target.closest(".model-option");
+  if (option) { e.preventDefault(); pickModel(option.dataset.value); }
+});
+
+// Open the menu on focus/click, closing only when the field loses focus to something else.
+$("model").addEventListener("focus", async () => {
+  if (!modelNames.length) await loadModels();
+  renderModelMenu($("model").value);
+});
+$("model").addEventListener("input", () => renderModelMenu($("model").value));
+$("model").addEventListener("blur", () => { $("modelMenu").hidden = true; });
+$("model").addEventListener("keydown", (e) => {
+  const options = [...$("modelMenu").children];
+  if (!options.length) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    modelHighlight = Math.min(Math.max(modelHighlight + (e.key === "ArrowDown" ? 1 : -1), 0), options.length - 1);
+    options.forEach((el, i) => el.classList.toggle("active", i === modelHighlight));
+    options[modelHighlight]?.scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter" && options[modelHighlight]) {
+    e.preventDefault();
+    pickModel(options[modelHighlight].dataset.value);
+  } else if (e.key === "Escape") {
+    $("modelMenu").hidden = true;
+  }
+});
+$("loadModels").addEventListener("click", async () => {
+  await loadModels();
+  $("model").focus();
 });
 
 $("go").addEventListener("click", async () => {
@@ -386,6 +449,7 @@ function showDeck(html) {
   $("placeholder").style.display = "none";
   $("toolbar").style.display = "flex";
   $("download").style.display = "inline-block";
+  $("pdf").style.display = "inline-block";
   $("open").style.display = "inline-block";
   $("filmstrip").style.display = $("editMode").checked ? "block" : "none";
   refreshStrip();
@@ -401,6 +465,23 @@ $("open").addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([lastDeck], { type: "text/html" }));
   a.target = "_blank"; a.rel = "noopener"; a.click();
+});
+$("pdf").addEventListener("click", async () => {
+  if (!lastDeck) return;
+  $("error").textContent = ""; $("pdf").disabled = true;
+  const prev = $("status").textContent;
+  $("status").textContent = "rendering PDF… (needs the container)";
+  try {
+    const r = await fetch("/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ html: lastDeck }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || r.statusText); }
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = "deck.pdf"; a.click();
+    URL.revokeObjectURL(url);
+    $("status").textContent = "PDF downloaded";
+  } catch (e) {
+    $("status").textContent = prev; $("error").textContent = e.message || String(e);
+  } finally { $("pdf").disabled = false; }
 });
 
 // ─── history (localStorage, per browser) ─────────────────────────────

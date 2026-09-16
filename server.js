@@ -2,7 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { SYSTEMS, EDIT_SYSTEM } = require("./design/systems.js");
-const { auditDeck } = require("./audit.js");
+const { auditDeck, exportPdf } = require("./audit.js");
 
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = path.join(__dirname, "public");
@@ -34,34 +34,75 @@ function readBody(req, onDone, maxBytes = 8_000_000) {
 }
 
 // Provider config: everything comes from the UI request; env vars are fallback only, never credentials in code.
+// Works with any OpenAI-compatible endpoint (e.g. https://api.openai.com/v1, Ollama, vLLM, OpenRouter, …).
 function providerConfig(provider = {}) {
-  const baseUrl = String(provider.baseUrl || process.env.SLIDEGEN_BASE_URL || "https://opencode.ai/zen/go/v1").replace(/\/+$/, "");
-  const model = provider.model || process.env.SLIDEGEN_MODEL || "mimo-v2.5";
-  const apiKey = provider.apiKey || process.env.OPENCODE_API_KEY || "";
-  const headers = (provider.headers && typeof provider.headers === "object" && !Array.isArray(provider.headers)) ? provider.headers : {};
-  return { baseUrl, model, apiKey, headers: { "User-Agent": "slidegen/0.1", ...headers } };
+  const requestHeaders = provider.headers;
+  const validHeaders = typeof requestHeaders === "object" && requestHeaders !== null && !Array.isArray(requestHeaders);
+
+  const baseUrl = String(provider.baseUrl || process.env.SLIDEGEN_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const model = provider.model || process.env.SLIDEGEN_MODEL || "gpt-4o-mini";
+  const apiKey = provider.apiKey || process.env.SLIDEGEN_API_KEY || "";
+  return { baseUrl, model, apiKey, headers: { "User-Agent": "slidegen/0.1", ...(validHeaders ? requestHeaders : {}) } };
 }
 
-async function smallCall(config, urlPath, body, timeoutMs = 60_000) {
-  const h = { ...config.headers };
-  if (config.apiKey) h.Authorization = `Bearer ${config.apiKey}`;
-  const r = await fetch(config.baseUrl + urlPath, { method: "GET", headers: h, signal: AbortSignal.timeout(timeoutMs) });
-  if (!r.ok) throw new Error(`provider ${r.status}: ${(await r.text()).slice(0, 500)}`);
-  return r.json();
+async function smallCall(config, urlPath, timeoutMs = 60_000) {
+  const headers = { ...config.headers };
+  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+  const response = await fetch(config.baseUrl + urlPath, { method: "GET", headers, signal: AbortSignal.timeout(timeoutMs) });
+  if (!response.ok) throw await providerError(response);
+  return response.json();
 }
 
+// Providers return model lists in different shapes for the same /models endpoint.
+// Examples: { data: ["gpt-4"] }, { models: [{ id: "gpt-4" }] }, or a bare array.
 function parseModelList(data) {
   const raw = data.data || data.models || data || [];
   if (!Array.isArray(raw)) return [];
-  return raw.map((m) => (typeof m === "string" ? m : m.id || m.model || m.name)).filter((x) => typeof x === "string");
+  const names = raw.map((entry) => (typeof entry === "string" ? entry : entry.id || entry.model || entry.name));
+  return names.filter((name) => typeof name === "string");
+}
+
+// Remove a wrapping markdown fence (```html ... ```), if present.
+// Models sometimes prepend or append prose ("Here is your presentation:"),
+// so strip anything before an opening fence line too.
+function stripFences(text) {
+  return text
+    .replace(/^[\s\S]*?\n\s*```[a-z]*\s*\n/, "") // prose before the first ```…``` fence
+    .replace(/^```[a-z]*\n?/, "")               // ``` at the very top, no fence language
+    .replace(/```\s*$/, "")
+    .trim();
 }
 
 // Stream a chat call and return the cleaned string (used for edit retries).
 async function callEditStream(config, messages, corrective) {
   const extra = corrective ? [{ role: "user", content: corrective }] : [];
   let raw = "";
-  await streamChat(config, { model: config.model, stream: true, messages: [...messages, ...extra] }, (d) => { raw += d; });
-  return raw.replace(/^\s*```[a-z]*\n?/, "").replace(/```\s*$/, "").trim();
+  await streamChat(config, { model: config.model, stream: true, messages: [...messages, ...extra] }, (delta) => { raw += delta; });
+  return stripFences(raw);
+}
+
+// Format a failed provider response into a short error message.
+// Anthropic-native endpoints reject chat/completions entirely (HTTP 500 with
+// {"type":"error",...} bodies) — that's a base-URL misconfiguration, so say so.
+async function providerError(response) {
+  const text = (await response.text()).slice(0, 500);
+  const looksAnthropic = text.includes('"type":"error"');
+  if (looksAnthropic) {
+    return new Error(`provider ${response.status} — this base URL looks Anthropic-native, not OpenAI-compatible. slidegen speaks the OpenAI chat/completions dialect; use a provider/gateway that accepts {"model", "messages", "stream"} at /chat/completions. Body: ${text}`);
+  }
+  return new Error(`provider ${response.status}: ${text}`);
+}
+
+// Turn one "data: {...}" line from the SSE stream into a text fragment, or "" if none.
+function textDeltaFromSseLine(line) {
+  if (!line.startsWith("data:")) return "";
+  const payload = line.slice(5).trim();
+  if (payload === "[DONE]") return "";
+  try {
+    return JSON.parse(payload).choices?.[0]?.delta?.content || "";
+  } catch {
+    return ""; // keepalive pings and partial lines are not JSON — ignore them
+  }
 }
 
 // Stream a chat completion, invoking onChunk(delta, received, seconds) per text delta.
@@ -76,6 +117,7 @@ function streamChat(config, body, onChunk) {
     let reader = null;
     const abort = new AbortController();
     const fail = (e) => { if (settled) return; settled = true; cleanup(); reject(e); };
+    const finish = () => { if (!settled) { settled = true; cleanup(); resolve(received); } };
     const cleanup = () => { clearInterval(idle); clearTimeout(total); try { reader?.cancel(); } catch {} };
     const idle = setInterval(() => {
       if (!settled && Date.now() - lastData > IDLE_MS) {
@@ -90,53 +132,56 @@ function streamChat(config, body, onChunk) {
       headers,
       body: JSON.stringify(body),
       signal: abort.signal,
-    }).then(async (r) => {
-      if (!r.ok) return fail(new Error(`provider ${r.status}: ${(await r.text()).slice(0, 500)}`));
-      if (!r.body) return fail(new Error("provider sent no body"));
-      reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
+    }).then(async (response) => {
+      if (!response.ok) return fail(await providerError(response));
+      if (!response.body) return fail(new Error("provider sent no body"));
+
+      reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         lastData = Date.now();
-        buf += dec.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, idx).trim();
-          buf = buf.slice(idx + 1);
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (payload === "[DONE]") continue;
-          try {
-            const delta = JSON.parse(payload).choices?.[0]?.delta?.content || "";
-            if (delta) { received += delta.length; onChunk(delta, received, (Date.now() - started) / 1000); }
-          } catch {}
+        buffer += decoder.decode(value, { stream: true });
+        // SSE events are newline-separated lines; process all complete lines.
+        let newlineAt = buffer.indexOf("\n");
+        while (newlineAt >= 0) {
+          const line = buffer.slice(0, newlineAt).trim();
+          buffer = buffer.slice(newlineAt + 1);
+          const delta = textDeltaFromSseLine(line);
+          if (delta) {
+            received += delta.length;
+            const secondsSoFar = (Date.now() - started) / 1000;
+            onChunk(delta, received, secondsSoFar);
+          }
+          newlineAt = buffer.indexOf("\n");
         }
       }
-      const ms = Date.now() - started;
-      log(`provider stream done in ${Math.round(ms / 1000)}s chars=${received} model=${config.model}`);
-      if (!settled) { settled = true; cleanup(); resolve(received); }
-    }).catch((e) => { if (!settled) { settled = true; cleanup(); reject(e); } else { try { reader?.cancel(); } catch {} } });
+      log(`provider stream done in ${Math.round((Date.now() - started) / 1000)}s chars=${received} model=${config.model}`);
+      finish();
+    }).catch((e) => { if (!settled) { fail(e); } else { try { reader?.cancel(); } catch {} } });
   });
 }
 
-// Build the single-slide regeneration/insertion prompt.
+// Build the single-slide edit prompt (replace or insert).
 function editPrompt(brief, slides, index, action, instruction, style) {
   const n = slides.length;
+  // Replace keeps the target's slot number; a new slide reserved the next free class.
+  const slideClass = action === "replace" ? `s${index + 1}` : `s${n + 1}`;
   const snap = (i, label) => `<!-- ${label} (slide ${i + 1} of ${n}) -->\n${slides[i]}`;
-  let ctx = "";
-  if (index > 0 && action !== "insert_before") ctx += snap(index - 1, "previous slide") + "\n\n";
+  let context = "";
+  if (index > 0 && action !== "insert_before") context += snap(index - 1, "previous slide") + "\n\n";
   let target = "";
   if (action === "replace") target = snap(index, "target slide");
   else {
     // Insertion: style-match to the closest slide.
-    if (index > 0) ctx += snap(Math.min(index, n - 1), "slide before insertion point") + "\n\n";
+    if (index > 0) context += snap(Math.min(index, n - 1), "slide before insertion point") + "\n\n";
     if (index < n) target = snap(index, "slide after insertion point");
   }
   const task = action === "replace"
-    ? `REGENERATE the TARGET slide. Keep its role in the deck, apply the user's fix below, and improve layout/typography per the design system. Your section keeps the number ${index + 1} — use class "s${index + 1}". IMPORTANT: this is a restyle/fix pass — unless the instruction explicitly asks for new content, keep the target slide's topic, bullets and facts intact.`
-    : `CREATE ONE NEW slide to insert at that position, matching the visual system of the neighboring slides (a unique class has been reserved for you: "s${n + 1}" — see Output Format).`;
+    ? `REGENERATE the TARGET slide. Keep its role in the deck, apply the user's fix below, and improve layout/typography per the design system. Your section keeps the number ${index + 1} — use class "${slideClass}". IMPORTANT: this is a restyle/fix pass — unless the instruction explicitly asks for new content, keep the target slide's topic, bullets and facts intact.`
+    : `CREATE ONE NEW slide to insert at that position, matching the visual system of the neighboring slides (a unique class has been reserved for you: "${slideClass}" — see Output Format).`;
 
   const styleBlock = style ? `
 
@@ -150,17 +195,19 @@ Output format (exactly):
 <style>
   /* ALL rules your slide needs, scoped under your section's unique class */
 </style>
-<section class="slide s${index + 1}">
+<section class="slide ${slideClass}">
   <!-- the slide markup -->
 </section>`;
-  const task2 = action === "replace"
-    ? task
-    : `CREATE ONE NEW slide to insert at that position, matching the visual system of the neighboring slides. You get class "s${n + 1}". Your slide goes between the two shown slides.`;
-  const outline = slides.map((s, i) => {
-    const t = (i === index ? target : s).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 90);
-    return `  ${i === index ? "→ TARGET" : i === index - 1 ? "↖" : " "}[${i + 1}] ${t}`;
-  }).join("\n");
-  return `${task2}
+  // One line per slide in the outline; the target gets a "→ TARGET" marker.
+  const outline = slides
+    .map((slideHtml, i) => {
+      const shown = i === index ? target : slideHtml;
+      const marker = i === index ? "→ TARGET" : i === index - 1 ? "↖" : " ";
+      const textPreview = shown.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 90);
+      return `  ${marker}[${i + 1}] ${textPreview}`;
+    })
+    .join("\n");
+  return `${task}
 
 DECK OUTLINE (so you understand where this slide sits in the narrative; → is the TARGET):
 ${outline}
@@ -168,7 +215,7 @@ ${outline}
 Original brief:
 ${brief}
 
-${ctx}
+${context}
 ${target}
 
 User instruction for the slide:
@@ -206,22 +253,26 @@ function extractSlides(html) {
   return found;
 }
 
-// Token-overlap helpers for content fidelity checks.
+// Token-overlap helpers for content fidelity checks: strip markup, keep meaningful words,
+// then compare what fraction of the smaller word set is shared.
 const STOP = new Set("the and for with that this from into your you can its are was were has have will would their there these those more most than then when what about into over under near between one two all any each every".split(" "));
 function tokens(html) {
-  const txt = html.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").toLowerCase();
-  return new Set(txt.match(/[a-z0-9]{3,}/g)?.filter((w) => !STOP.has(w)) || []);
+  const withoutStyles = html.replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const textOnly = withoutStyles.replace(/<[^>]+>/g, " ").toLowerCase();
+  const words = textOnly.match(/[a-z0-9]{3,}/g) || [];
+  const meaningfulWords = words.filter((word) => !STOP.has(word));
+  return new Set(meaningfulWords);
 }
-function overlap(a, b) {
-  if (!a.size || !b.size) return 0;
-  let inter = 0;
-  a.forEach((w) => { if (b.has(w)) inter++; });
-  return inter / Math.min(a.size, b.size);
+function overlap(tokensA, tokensB) {
+  if (!tokensA.size || !tokensB.size) return 0;
+  let shared = 0;
+  tokensA.forEach((word) => { if (tokensB.has(word)) shared++; });
+  return shared / Math.min(tokensA.size, tokensB.size);
 }
 const server = http.createServer(async (req, res) => {
-  const t0 = Date.now();
-  const done = (code, payload) => {
-    log(`${req.method} ${req.url} ${code} in ${Date.now() - t0}ms`);
+  const requestStartedAt = Date.now();
+  const finish = (code, payload) => {
+    log(`${req.method} ${req.url} ${code} in ${Date.now() - requestStartedAt}ms`);
     send(res, code, payload);
   };
 
@@ -230,11 +281,11 @@ const server = http.createServer(async (req, res) => {
       try {
         const { provider } = JSON.parse(body || "{}");
         const config = providerConfig(provider);
-        if (!config.apiKey) return done(400, JSON.stringify({ error: "api key required" }));
-        const list = parseModelList(await smallCall(config, "/models", {}));
-        done(200, JSON.stringify({ models: list }));
-      } catch (e) {
-        done(502, JSON.stringify({ error: e.message }));
+        if (!config.apiKey) return finish(400, JSON.stringify({ error: "api key required" }));
+        const list = parseModelList(await smallCall(config, "/models"));
+        finish(200, JSON.stringify({ models: list }));
+      } catch (error) {
+        finish(502, JSON.stringify({ error: error.message }));
       }
     });
     return;
@@ -244,17 +295,19 @@ const server = http.createServer(async (req, res) => {
     readBody(req, (body) => {
       try {
         const { html, title } = JSON.parse(body || "{}");
-        if (!html || !/<html/i.test(html)) return done(400, JSON.stringify({ error: "html required" }));
+        if (!html || !/<html/i.test(html)) return finish(400, JSON.stringify({ error: "html required" }));
         const series = title || "edited";
-        const base = path.join(__dirname, "output", `${series}`);
-        fs.mkdirSync(base, { recursive: true });
-        const n = fs.readdirSync(base).filter((f) => f.endsWith(".html")).length + 1;
-        const file = path.join(base, `${n}-deck.html`);
+        const outputDir = path.join(__dirname, "output", `${series}`);
+        fs.mkdirSync(outputDir, { recursive: true });
+        // Numbered files: 1-deck.html, 2-deck.html, ...
+        const existingDecks = fs.readdirSync(outputDir).filter((fileName) => fileName.endsWith(".html"));
+        const nextNumber = existingDecks.length + 1;
+        const file = path.join(outputDir, `${nextNumber}-deck.html`);
         fs.writeFileSync(file, html);
         log(`saved ${path.relative(__dirname, file)} (${html.length} chars)`);
-        done(200, JSON.stringify({ saved: path.basename(file) }));
-      } catch (e) {
-        done(500, JSON.stringify({ error: e.message }));
+        finish(200, JSON.stringify({ saved: path.basename(file) }));
+      } catch (error) {
+        finish(500, JSON.stringify({ error: error.message }));
       }
     });
     return;
@@ -263,65 +316,87 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/edit") {
     readBody(req, async (body) => {
       try {
-        const { prompt, preset, provider, slides, index, action, instruction, style } = JSON.parse(body || "{}");
-        if (!Array.isArray(slides) || !slides.length) return done(400, JSON.stringify({ error: "slides[] required" }));
-        if (action === "replace" && (index < 0 || index >= slides.length)) return done(400, JSON.stringify({ error: "bad index" }));
-        if (!instruction || !instruction.trim()) return done(400, JSON.stringify({ error: "instruction required" }));
+        const { prompt, provider, slides, index, action, instruction, style } = JSON.parse(body || "{}");
+        if (!Array.isArray(slides) || !slides.length) return finish(400, JSON.stringify({ error: "slides[] required" }));
+        if (action === "replace" && (index < 0 || index >= slides.length)) return finish(400, JSON.stringify({ error: "bad index" }));
+        if (!instruction || !instruction.trim()) return finish(400, JSON.stringify({ error: "instruction required" }));
         const config = providerConfig(provider);
-        if (!config.apiKey) return done(400, JSON.stringify({ error: "no API key: set it in provider settings" }));
+        if (!config.apiKey) return finish(400, JSON.stringify({ error: "no API key: set it in provider settings" }));
         const messages = [
           { role: "system", content: EDIT_SYSTEM },
           { role: "user", content: editPrompt(prompt || "(brief not kept)", slides, index, action || "replace", instruction.trim(), style) },
         ];
-        let out = "";
-        await streamChat(config, { model: config.model, stream: true, messages }, (d) => { out += d; });
-        out = out.replace(/^\s*```[a-z]*\n?/, "").replace(/```\s*$/, "").trim();
-        if (!/<section/i.test(out)) throw new Error("model did not return a <section>. First 300 chars: " + out.slice(0, 300));
-        // Reuse-class violation: slider-local scope required when deck CSS provided; retry once with the reason.
-        if (style && !out.toLowerCase().includes("<style")) {
+        let output = "";
+        await streamChat(config, { model: config.model, stream: true, messages }, (delta) => { output += delta; });
+        output = stripFences(output);
+        if (!/<section/i.test(output)) throw new Error("model did not return a <section>. First 300 chars: " + output.slice(0, 300));
+        // Reuse-class violation: slide-local scope required when deck CSS provided; retry once with the reason.
+        if (style && !output.toLowerCase().includes("<style")) {
           log("edit: output had no slide-local <style>, retrying with correction");
-          out = "";
           await streamChat(config, {
             model: config.model, stream: true,
-            messages: [...messages, { role: "assistant", content: out || "(previous attempt reused sibling classes without defining scoped CSS)" },
+            messages: [...messages, { role: "assistant", content: "(previous attempt reused sibling classes without defining scoped CSS)" },
               { role: "user", content: `Your previous answer used classes styled only under the original slide's scope (e.g. .s4 .row) — on its own it renders unstyled. Redo it: give your section a unique class and include a <style> block defining EVERY rule your slide needs, scoped under that class. Keep all content and the design system identical otherwise.` }],
-          }, (d) => { out += d; });
-          out = out.replace(/^\s*```[a-z]*\n?/, "").replace(/```\s*$/, "").trim();
+          }, (delta) => { output += delta; });
+          output = stripFences(output);
         }
-        if (!/<section/i.test(out)) throw new Error("no <section> after retry. First 300 chars: " + out.slice(0, 300));
+        if (!/<section/i.test(output)) throw new Error("no <section> after retry. First 300 chars: " + output.slice(0, 300));
 
         // CONTENT FIDELITY: a fix/replace must keep the target slide's facts. Inserts must not duplicate a sibling.
         const target = slides[index] || "";
         if (action === "replace") {
-          const kept = overlap(tokens(out), tokens(target));
-          if (kept < 0.3) {
-            log(`edit: fidelity ${kept.toFixed(2)} too low, retrying with constraint`);
-            out = await callEditStream(config, messages, `YOUR PREVIOUS ANSWER DISCARDED THE TARGET SLIDE'S CONTENT (token overlap ${(kept * 100).toFixed(0)}%). The user asked to restyle/fix slides, not to replace their topic. Redo the same fix, with every fact, number and name from the TARGET slide intact in your markup. Only the layout and styling change.`);
-            const kept2 = overlap(tokens(out), tokens(target));
-            if (kept2 < 0.3) log(`edit: fidelity still low after retry (${kept2.toFixed(2)}) — returning anyway`);
+          const keptTokens = overlap(tokens(output), tokens(target));
+          if (keptTokens < 0.3) {
+            log(`edit: fidelity ${keptTokens.toFixed(2)} too low, retrying with constraint`);
+            output = await callEditStream(config, messages, `YOUR PREVIOUS ANSWER DISCARDED THE TARGET SLIDE'S CONTENT (token overlap ${(keptTokens * 100).toFixed(0)}%). The user asked to restyle/fix slides, not to replace their topic. Redo the same fix, with every fact, number and name from the TARGET slide intact in your markup. Only the layout and styling change.`);
+            const keptTokensAfterRetry = overlap(tokens(output), tokens(target));
+            if (keptTokensAfterRetry < 0.3) log(`edit: fidelity still low after retry (${keptTokensAfterRetry.toFixed(2)}) — returning anyway`);
           }
         } else {
-          const dup = slides.map((s, j) => [j, overlap(tokens(out), tokens(s))]).sort((a, b) => b[1] - a[1])[0];
-          if (dup[1] > 0.85) {
-            log(`edit: new slide duplicates existing slide ${dup[0] + 1} (${dup[1].toFixed(2)}), retrying`);
-            out = await callEditStream(config, messages, `YOUR PREVIOUS ANSWER WAS A NEAR-COPY OF THE DECK'S EXISTING SLIDE ${dup[0] + 1}. Create a DIFFERENT slide instead, covering the user's instruction from a fresh angle with distinct content.`);
+          // Insert: find the most similar existing slide; a near-copy is a bug worth redoing.
+          const similarityToEachSlide = slides.map((slideHtml, j) => [j, overlap(tokens(output), tokens(slideHtml))]);
+          const mostSimilar = similarityToEachSlide.sort((a, b) => b[1] - a[1])[0];
+          const [similarSlideIndex, similarScore] = mostSimilar;
+          if (similarScore > 0.85) {
+            log(`edit: new slide duplicates existing slide ${similarSlideIndex + 1} (${similarScore.toFixed(2)}), retrying`);
+            output = await callEditStream(config, messages, `YOUR PREVIOUS ANSWER WAS A NEAR-COPY OF THE DECK'S EXISTING SLIDE ${similarSlideIndex + 1}. Create a DIFFERENT slide instead, covering the user's instruction from a fresh angle with distinct content.`);
           }
         }
 
-        // Render-audit the finished slide inside the deck, retry once with measured geometry.
-        const deckForAudit = slides.map((s, j) => ({ html: j === index ? out : s }));
-        let audited = await auditDeck(deckForAudit, style || "");
+        // Render-audit the finished slide inside the deck (with the new slide swapped in),
+        // and retry once with the measured geometry issues.
+        const deckWithEditedSlide = slides.map((slideHtml, j) => ({ html: j === index ? output : slideHtml }));
+        let audited = await auditDeck(deckWithEditedSlide, style || "");
         if (!audited.ok && audited.issues.length) {
-          const fix = audited.issues.map((i) => `slide ${i.slide}: ${i.msg}`).join("; ");
-          log(`edit audit: retrying — ${fix}`);
-          const second = await callEditStream(config, messages, `Your slide had real geometry violations in a browser: ${fix}. Rules: content must end above y=624 (720-96 bottom margin), start after y=64, and stay between x=76 and x=1204. Re-render the same slide, identical design & content, with corrected sizes/spacings so these measurements pass.`);
-          out = second;
+          const issueList = audited.issues.map((issue) => `slide ${issue.slide}: ${issue.msg}`).join("; ");
+          log(`edit audit: retrying — ${issueList}`);
+          output = await callEditStream(config, messages, `Your slide had real geometry violations in a browser: ${issueList}. Rules: content must end above y=624 (720-96 bottom margin), start after y=64, and stay between x=76 and x=1204. Re-render the same slide, identical design & content, with corrected sizes/spacings so these measurements pass.`);
         }
-        if (!/<section/i.test(out)) throw new Error("edit failed validation. First 300 chars: " + out.slice(0, 300));
-        log(`edit ${action} slide ${index} → ${out.length} chars`);
-        done(200, JSON.stringify({ section: out }));
-      } catch (e) {
-        done(502, JSON.stringify({ error: e.message }));
+        if (!/<section/i.test(output)) throw new Error("edit failed validation. First 300 chars: " + output.slice(0, 300));
+        log(`edit ${action} slide ${index} → ${output.length} chars`);
+        finish(200, JSON.stringify({ section: output }));
+      } catch (error) {
+        finish(502, JSON.stringify({ error: error.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/export") {
+    readBody(req, async (body) => {
+      try {
+        const { html } = JSON.parse(body || "{}");
+        if (!html || !/<html/i.test(html)) return finish(400, JSON.stringify({ error: "html required" }));
+        const result = await exportPdf(html);
+        if (result.skipped || !result.pdf) {
+          const reason = result.error || "browser unavailable";
+          return finish(503, JSON.stringify({ error: `PDF export needs the container (headless Chromium): ${reason}` }));
+        }
+        log(`export pdf ${result.pdf.length} bytes`);
+        res.writeHead(200, { "Content-Type": "application/pdf", "Content-Length": result.pdf.length, "Content-Disposition": 'attachment; filename="deck.pdf"', "Cache-Control": "no-store" });
+        res.end(result.pdf);
+      } catch (error) {
+        finish(500, JSON.stringify({ error: error.message }));
       }
     });
     return;
@@ -340,7 +415,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
       const write = (obj) => { try { res.write(JSON.stringify(obj) + "\n"); } catch {} };
       const started = Date.now();
-      let html = "";
+      let htmlResult = "";
       let lastLoggedChar = 0;
       try {
         log(`generate started: model=${config.model} preset=${preset || "swiss"} brief=${prompt.length} chars`);
@@ -352,49 +427,52 @@ const server = http.createServer(async (req, res) => {
             { role: "user", content: prompt.trim() },
           ],
         }, (delta, chars) => {
-          html += delta;
+          htmlResult += delta;
           if (chars - lastLoggedChar > 2000) {
             lastLoggedChar = chars;
             log(`generate stream: ${chars} chars in ${Math.round((Date.now() - started) / 1000)}s`);
           }
           write({ phase: "progress", chars, seconds: Math.round((Date.now() - started) / 1000) });
         });
-        html = html.replace(/^\s*```[a-z]*\n?/, "").replace(/```\s*$/, "").trim();
-        if (!/<html/i.test(html)) throw new Error("model did not return HTML. First 300 chars: " + html.slice(0, 300));
+        htmlResult = stripFences(htmlResult);
+        if (!/<html/i.test(htmlResult)) throw new Error("model did not return HTML. First 300 chars: " + htmlResult.slice(0, 300));
         // Render-audit the whole deck; warn about margin/overflow issues so the user can ✎ fix targeted slides.
         try {
-          const style = html.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] || "";
-          const secs = [...html.matchAll(/<section[\s\S]*?<\/section>/g)].map((m) => ({ html: m[0] }));
-          if (secs.length) {
-            const a = await auditDeck(secs, style);
-            if (!a.ok && a.issues.length) {
-              a.issues.forEach((i) => log(`generate audit: slide ${i.slide} — ${i.msg}`));
-              write({ phase: "warn", issues: a.issues });
+          const style = htmlResult.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] || "";
+          const sections = [...htmlResult.matchAll(/<section[\s\S]*?<\/section>/g)].map((match) => ({ html: match[0] }));
+          if (sections.length) {
+            const audit = await auditDeck(sections, style);
+            if (!audit.ok && audit.issues.length) {
+              audit.issues.forEach((issue) => log(`generate audit: slide ${issue.slide} — ${issue.msg}`));
+              write({ phase: "warn", issues: audit.issues });
             }
           }
-        } catch (e2) { log(`generate audit skipped: ${e2.message}`); }
-        log(`${req.method} ${req.url} 200 in ${Date.now() - t0}ms (${html.length} chars)`);
+        } catch (auditError) { log(`generate audit skipped: ${auditError.message}`); }
+        log(`${req.method} ${req.url} 200 in ${Date.now() - t0}ms (${htmlResult.length} chars)`);
         const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
         const dir = path.join(__dirname, "output", stamp);
         fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, "deck.html"), html);
+        fs.writeFileSync(path.join(dir, "deck.html"), htmlResult);
         log(`saved to ${path.relative(__dirname, dir)}/deck.html`);
-        write({ phase: "done", html });
-      } catch (e) {
-        log(`${req.method} ${req.url} 502 in ${Date.now() - t0}ms — ${e.message.slice(0, 120)}`);
-        write({ phase: "error", error: e.message });
+        write({ phase: "done", html: htmlResult });
+      } catch (error) {
+        log(`${req.method} ${req.url} 502 in ${Date.now() - t0}ms — ${error.message.slice(0, 120)}`);
+        write({ phase: "error", error: error.message });
       }
       res.end();
     });
     return;
   }
 
+  // Static file fallback: serve files from public/, map "/" to index.html.
   const urlPath = req.url.split("?")[0];
-  const file = path.join(STATIC_DIR, urlPath === "/" ? "index.html" : urlPath);
-  if (file.startsWith(STATIC_DIR) && fs.existsSync(file)) {
+  const fileName = urlPath === "/" ? "index.html" : urlPath;
+  const file = path.join(STATIC_DIR, fileName);
+  const isWithinPublicDir = file.startsWith(STATIC_DIR);
+  if (isWithinPublicDir && fs.existsSync(file)) {
     send(res, 200, fs.readFileSync(file), MIME[path.extname(file)] || "application/octet-stream");
   } else {
-    done(404, "not found");
+    finish(404, "not found");
   }
 });
 

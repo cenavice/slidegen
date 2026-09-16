@@ -4,6 +4,6 @@ services:
     volumes: ["./public:/app/public", "./output:/app/output"]
     ports: ["3000:3000"]
     environment:
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY}
-      SLIDEGEN_MODEL: ${SLIDEGEN_MODEL:-mimo-v2.5}
-      SLIDEGEN_BASE_URL: ${SLIDEGEN_BASE_URL:-https://opencode.ai/zen/go/v1}
+      SLIDEGEN_API_KEY: ${SLIDEGEN_API_KEY}
+      SLIDEGEN_MODEL: ${SLIDEGEN_MODEL:-gpt-4o-mini}
+      SLIDEGEN_BASE_URL: ${SLIDEGEN_BASE_URL:-https://api.openai.com/v1}

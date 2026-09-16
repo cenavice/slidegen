@@ -34,52 +34,59 @@ async function auditDeck(sections, globalStyle) {
     await page.setContent(html, { waitUntil: "load" });
     // Neutralize the model's own scaler so we measure in fixed pixels, and make every slide visible.
     await page.evaluate(() => {
-      document.querySelectorAll("*").forEach((el) => {
-        const t = getComputedStyle(el).transform;
-        if (t && t !== "none" && /scale/.test(t)) el.style.transform = "none";
+      // Some decks apply transform: scale(...) to fit — that shrinks our measurement space.
+      document.querySelectorAll("*").forEach((element) => {
+        const transform = getComputedStyle(element).transform;
+        const isScaled = transform && transform !== "none" && /scale/.test(transform);
+        if (isScaled) element.style.transform = "none";
       });
-      document.querySelectorAll("section[class*=slide]").forEach((s) => {
-        s.style.display = "block";
-        s.style.position = "absolute";
-        s.style.width = "1280px";
-        s.style.height = "720px";
+      // Also force every slide to render as a full-size, visible block.
+      document.querySelectorAll("section[class*=slide]").forEach((slide) => {
+        slide.style.display = "block";
+        slide.style.position = "absolute";
+        slide.style.width = "1280px";
+        slide.style.height = "720px";
       });
     });
     const { issues } = await page.evaluate((SW, SH) => {
       const MARGIN = { left: 76, right: 76, top: 64, bottom: 96 };
-      const out = { issues: [] };
+      const issues = [];
       document.querySelectorAll("section[class*=slide]").forEach((slide, i) => {
-        const sr = slide.getBoundingClientRect();
+        const slideRect = slide.getBoundingClientRect();
         const slideNo = i + 1;
+        // The slide's content bounding box, in viewport coordinates.
         let maxBottom = -1e9, minTop = 1e9, minLeft = 1e9, maxRight = -1e9;
         slide.querySelectorAll("*").forEach((el) => {
           const r = el.getBoundingClientRect();
-          if (!r.width || !r.height) return;
+          if (!r.width || !r.height) return; // zero-size elements (whitespace nodes etc.)
           const cs = getComputedStyle(el);
           if (cs.display === "none" || cs.visibility === "hidden") return;
           if (el.localName === "style" || el.localName === "script") return;
-          maxBottom = Math.max(maxBottom, r.bottom); minTop = Math.min(minTop, r.top);
-          minLeft = Math.min(minLeft, r.left); maxRight = Math.max(maxRight, r.right);
+          maxBottom = Math.max(maxBottom, r.bottom);
+          minTop = Math.min(minTop, r.top);
+          minLeft = Math.min(minLeft, r.left);
+          maxRight = Math.max(maxRight, r.right);
         });
-        if (maxBottom === -1e9) return;
-        const rel = (v) => Math.round(v - sr.top);
-        const relx = (v) => Math.round(v - sr.left);
-        if (rel(maxBottom) > SH) out.issues.push({ slide: slideNo, msg: `overflows: content reaches y=${rel(maxBottom)}px > 720 stage` });
-        else if (rel(maxBottom) > SH - MARGIN.bottom + 8) out.issues.push({ slide: slideNo, msg: `tight bottom: content ends at y=${rel(maxBottom)}px, bottom margin must be >=96px (<=624px)` });
-        if (rel(minTop) < 0) out.issues.push({ slide: slideNo, msg: `content above slide top (y=${rel(minTop)}px)` });
-        else if (rel(minTop) < MARGIN.top - 24) out.issues.push({ slide: slideNo, msg: `tight top: content starts at y=${rel(minTop)}px, top margin must be >=64px` });
-        if (relx(maxRight) > SW) out.issues.push({ slide: slideNo, msg: `overflows right: content at x=${relx(maxRight)}px > 1280 stage` });
-        else if (relx(maxRight) > SW - MARGIN.right + 8) out.issues.push({ slide: slideNo, msg: `tight right: content at x=${relx(maxRight)}px, right margin must be >=76px (<=1204px)` });
-        if (relx(minLeft) < 0) out.issues.push({ slide: slideNo, msg: `content left of slide edge (x=${relx(minLeft)}px)` });
-        else if (relx(minLeft) < MARGIN.left - 24) out.issues.push({ slide: slideNo, msg: `tight left: content at x=${relx(minLeft)}px, left margin must be >=76px` });
+        if (maxBottom === -1e9) return; // nothing measurable inside this slide
+        // Convert viewport coordinates back to "pixels from the slide's top-left corner".
+        const y = (v) => Math.round(v - slideRect.top);
+        const x = (v) => Math.round(v - slideRect.left);
+        if (y(maxBottom) > SH) issues.push({ slide: slideNo, msg: `overflows: content reaches y=${y(maxBottom)}px > 720 stage` });
+        else if (y(maxBottom) > SH - MARGIN.bottom + 8) issues.push({ slide: slideNo, msg: `tight bottom: content ends at y=${y(maxBottom)}px, bottom margin must be >=96px (<=624px)` });
+        if (y(minTop) < 0) issues.push({ slide: slideNo, msg: `content above slide top (y=${y(minTop)}px)` });
+        else if (y(minTop) < MARGIN.top - 24) issues.push({ slide: slideNo, msg: `tight top: content starts at y=${y(minTop)}px, top margin must be >=64px` });
+        if (x(maxRight) > SW) issues.push({ slide: slideNo, msg: `overflows right: content at x=${x(maxRight)}px > 1280 stage` });
+        else if (x(maxRight) > SW - MARGIN.right + 8) issues.push({ slide: slideNo, msg: `tight right: content at x=${x(maxRight)}px, right margin must be >=76px (<=1204px)` });
+        if (x(minLeft) < 0) issues.push({ slide: slideNo, msg: `content left of slide edge (x=${x(minLeft)}px)` });
+        else if (x(minLeft) < MARGIN.left - 24) issues.push({ slide: slideNo, msg: `tight left: content at x=${x(minLeft)}px, left margin must be >=76px` });
       });
-      return out;
+      return { issues };
     }, SLIDE_W, SLIDE_H);
     await page.close();
     return { skipped: false, issues, ok: issues.length === 0 };
-  } catch (e) {
+  } catch (error) {
     try { if (page) await page.close(); } catch {}
-    return { skipped: true, issues: [], ok: true, error: String(e) };
+    return { skipped: true, issues: [], ok: true, error: String(error) };
   }
 }
 
@@ -87,4 +94,37 @@ function buildProbe(sections, globalStyle) {
   return `<!DOCTYPE html><html><head><meta charset="utf-8">${globalStyle ? `<style>${globalStyle}</style>` : ""}</head><body>${sections.map((s) => s.html).join("\n")}</body></html>`;
 }
 
-module.exports = { auditDeck };
+// One PDF page per <section class="slide">, each exactly 1280x720. The deck's own
+// scaler/nav is neutralized so every slide is visible and unstretched; print CSS
+// forces a page break after each section. Returns { pdf } or { skipped, error }.
+async function exportPdf(html) {
+  let page;
+  try {
+    await chrome();
+    page = await browser.newPage();
+  } catch (error) {
+    return { skipped: true, error: String(error) };
+  }
+  try {
+    await page.setViewport({ width: SLIDE_W, height: SLIDE_H });
+    await page.setContent(html, { waitUntil: "load" });
+    await page.emulateMediaType("print");
+    await page.addStyleTag({ content: `
+      @page { size: ${SLIDE_W}px ${SLIDE_H}px; margin: 0; }
+      * { animation: none !important; transition: none !important; }
+      section[class*="slide"] { display:block !important; position:relative !important;
+        width:${SLIDE_W}px !important; height:${SLIDE_H}px !important;
+        transform:none !important; opacity:1 !important; visibility:visible !important;
+        page-break-after: always; break-after: page; page-break-inside: avoid; }
+      section[class*="slide"]:last-of-type { page-break-after: auto; break-after: auto; }
+    ` });
+    const pdf = await page.pdf({ width: `${SLIDE_W}px`, height: `${SLIDE_H}px`, printBackground: true, preferCSSPageSize: true });
+    await page.close();
+    return { skipped: false, pdf: Buffer.from(pdf) };
+  } catch (error) {
+    try { if (page) await page.close(); } catch {}
+    return { skipped: true, error: String(error) };
+  }
+}
+
+module.exports = { auditDeck, exportPdf };
