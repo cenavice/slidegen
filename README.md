@@ -4,7 +4,7 @@ Generate presentation decks as standalone 16:9 HTML slides from a single text br
 
 No build step, no framework, no runtime dependencies — one Node script plus a static page.
 
-> **⚠ Work in progress** — this project is actively evolving and has rough edges (features still being built — for example, PDF export is not working yet). Contributions are very welcome: bug reports, feature ideas, design-system presets, docs — see [Contributing](#contributing).
+> **⚠ Work in progress** — this project is actively evolving and has rough edges (features still being built). Contributions are very welcome: bug reports, feature ideas, design-system presets, docs — see [Contributing](#contributing).
 
 ## Why this exists
 
@@ -55,7 +55,7 @@ The full generated file is checked in at [`sample/deck.html`](sample/deck.html) 
 - **Content fidelity checks** — token-overlap comparison ensures a fix pass doesn't silently discard the target slide's facts and an insert isn't a near-duplicate of a sibling slide.
 - **Streaming with watchdogs** — idle timeout (default 120 s) catches stalled providers; a hard total cap (default 15 min) bounds every generation.
 - **History** — decks are auto-saved to `output/<timestamp>/deck.html` (server) and per-browser in `localStorage`, so nothing is lost on refresh.
-- **PDF export** — one PDF page per slide, exactly 1280×720, via headless Chromium. **Note: not currently working** — the Download PDF button errors out; the HTML deck always works.
+- **PDF export** — one PDF page per slide, exactly 1280×720, via headless Chromium.
 
 ## Requirements
 
@@ -88,6 +88,12 @@ SLIDEGEN_API_KEY=sk-... docker compose up --build
 # open http://localhost:3000
 ```
 
+During development, `docker-compose.override.yml` bind-mounts the source and runs
+`node --watch server.js`, so edits to `server.js`, `audit.js`, or `design/` reload
+automatically — no rebuild needed (rebuild only when `package.json` or the
+Dockerfile changes). If an edit doesn't take effect the watcher missed it; run
+`docker restart slidegen-slidegen-1`.
+
 ## Configuration
 
 Env vars are fallbacks; anything set in the web UI overrides them.
@@ -100,7 +106,7 @@ Env vars are fallbacks; anything set in the web UI overrides them.
 | `PORT` | `3000` | HTTP port. |
 | `SLIDEGEN_IDLE_TIMEOUT_MS` | `120000` | Abort generation when nothing arrives from the provider for this long. |
 | `SLIDEGEN_TIMEOUT_MS` | `900000` | Hard cap for one generation regardless of progress. |
-| `SLIDEGEN_CHROME` | `/usr/bin/chromium-browser` | Path to the Chromium executable used by the audit/PDF. |
+| `SLIDEGEN_CHROME` | *(auto-detected)* | Path to the Chromium executable used by the audit/PDF. Falls back to common paths (`/usr/bin/chromium`, `chromium-browser`, `google-chrome`). |
 
 ## How it works
 

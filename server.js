@@ -62,11 +62,23 @@ function parseModelList(data) {
   return names.filter((name) => typeof name === "string");
 }
 
-// Remove a wrapping markdown fence (```html ... ```), if present.
-// Models sometimes prepend or append prose ("Here is your presentation:"),
-// so strip anything before an opening fence line too.
+// Keep only the HTML document itself. Models wrap it in prose and/or a ```html
+// fence, and often append explanation after </html> — all of which must not be
+// saved, shown, or printed as extra slides. Returns null if there's no document.
+function extractDocument(text) {
+  const start = text.search(/<!doctype html|<html[\s>]/i);
+  if (start < 0) return null;
+  const tail = text.slice(start);
+  const htmlEnd = tail.search(/<\/html>/i);
+  if (htmlEnd >= 0) return tail.slice(0, htmlEnd + 7).trim();
+  const bodyEnd = tail.search(/<\/body>/i);
+  if (bodyEnd >= 0) return tail.slice(0, bodyEnd + 7).trim();
+  return tail.trim();
+}
+
+// Clean a full deck (extractDocument) or a single slide fragment (fences only).
 function stripFences(text) {
-  return text
+  return extractDocument(text) || text
     .replace(/^[\s\S]*?\n\s*```[a-z]*\s*\n/, "") // prose before the first ```…``` fence
     .replace(/^```[a-z]*\n?/, "")               // ``` at the very top, no fence language
     .replace(/```\s*$/, "")
@@ -303,8 +315,9 @@ const server = http.createServer(async (req, res) => {
         const existingDecks = fs.readdirSync(outputDir).filter((fileName) => fileName.endsWith(".html"));
         const nextNumber = existingDecks.length + 1;
         const file = path.join(outputDir, `${nextNumber}-deck.html`);
-        fs.writeFileSync(file, html);
-        log(`saved ${path.relative(__dirname, file)} (${html.length} chars)`);
+        const doc = extractDocument(html) || html;
+        fs.writeFileSync(file, doc);
+        log(`saved ${path.relative(__dirname, file)} (${doc.length} chars)`);
         finish(200, JSON.stringify({ saved: path.basename(file) }));
       } catch (error) {
         finish(500, JSON.stringify({ error: error.message }));
@@ -387,12 +400,16 @@ const server = http.createServer(async (req, res) => {
       try {
         const { html } = JSON.parse(body || "{}");
         if (!html || !/<html/i.test(html)) return finish(400, JSON.stringify({ error: "html required" }));
-        const result = await exportPdf(html);
+        const result = await exportPdf(extractDocument(html) || html);
         if (result.skipped || !result.pdf) {
           const reason = result.error || "browser unavailable";
           return finish(503, JSON.stringify({ error: `PDF export needs the container (headless Chromium): ${reason}` }));
         }
-        log(`export pdf ${result.pdf.length} bytes`);
+        const pdfDir = path.join(__dirname, "output", "pdf");
+        fs.mkdirSync(pdfDir, { recursive: true });
+        const pdfFile = path.join(pdfDir, `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.pdf`);
+        fs.writeFileSync(pdfFile, result.pdf);
+        log(`export pdf ${result.pdf.length} bytes → ${path.relative(__dirname, pdfFile)}`);
         res.writeHead(200, { "Content-Type": "application/pdf", "Content-Length": result.pdf.length, "Content-Disposition": 'attachment; filename="deck.pdf"', "Cache-Control": "no-store" });
         res.end(result.pdf);
       } catch (error) {
@@ -448,7 +465,7 @@ const server = http.createServer(async (req, res) => {
             }
           }
         } catch (auditError) { log(`generate audit skipped: ${auditError.message}`); }
-        log(`${req.method} ${req.url} 200 in ${Date.now() - t0}ms (${htmlResult.length} chars)`);
+        log(`${req.method} ${req.url} 200 in ${Date.now() - started}ms (${htmlResult.length} chars)`);
         const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
         const dir = path.join(__dirname, "output", stamp);
         fs.mkdirSync(dir, { recursive: true });
@@ -456,7 +473,7 @@ const server = http.createServer(async (req, res) => {
         log(`saved to ${path.relative(__dirname, dir)}/deck.html`);
         write({ phase: "done", html: htmlResult });
       } catch (error) {
-        log(`${req.method} ${req.url} 502 in ${Date.now() - t0}ms — ${error.message.slice(0, 120)}`);
+        log(`${req.method} ${req.url} 502 in ${Date.now() - started}ms — ${error.message.slice(0, 120)}`);
         write({ phase: "error", error: error.message });
       }
       res.end();

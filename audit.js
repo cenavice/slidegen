@@ -3,18 +3,28 @@
 //   stage 1280x720; margins 76/64/96; nothing within 32px of an edge.
 // ponytail: puppeteer-core is only installed in the container; require lazily so the
 // server still runs locally and audits simply skip when the dep/browser is absent.
+const fs = require("fs");
 const SLIDE_W = 1280, SLIDE_H = 720;
-const MARGIN = { left: 76, right: 76, top: 64, bottom: 96 };
-const EDGE = 32; // nothing closer than this to any edge
+
+// Chromium's binary name varies by distro: Alpine ships /usr/bin/chromium,
+// Debian/Ubuntu chromium-browser, Google Chrome google-chrome. Detect it.
+function chromePath() {
+  if (process.env.SLIDEGEN_CHROME) return process.env.SLIDEGEN_CHROME;
+  const candidates = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/opt/google/chrome/chrome"];
+  return candidates.find((p) => fs.existsSync(p)) || "/usr/bin/chromium";
+}
 
 let browser = null;
 async function chrome() {
   if (browser) return browser;
   const puppeteer = require("puppeteer-core");
-  browser = await puppeteer.launch({
-    executablePath: process.env.SLIDEGEN_CHROME || "/usr/bin/chromium-browser",
+  const launched = await puppeteer.launch({
+    executablePath: chromePath(),
     args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
   });
+  // A crashed browser must not poison later requests with "Connection closed".
+  launched.once("disconnected", () => { browser = null; });
+  browser = launched;
   return browser;
 }
 
@@ -109,10 +119,54 @@ async function exportPdf(html) {
     await page.setViewport({ width: SLIDE_W, height: SLIDE_H });
     await page.setContent(html, { waitUntil: "load" });
     await page.emulateMediaType("print");
+    // Decks wrap slides in a fixed, scaled #stage that clips to 720px. Neutralize
+    // those wrappers IN PLACE — do not move slides out, or CSS variables/selectors
+    // scoped to #stage (backgrounds, colors, padding) stop applying.
+    await page.evaluate(() => {
+      const slides = [...document.querySelectorAll("section[class*=slide]")];
+      if (!slides.length) return;
+      const ancestors = new Set();
+      slides.forEach((slide) => {
+        for (let parent = slide.parentElement; parent && parent !== document.documentElement; parent = parent.parentElement) ancestors.add(parent);
+      });
+      ancestors.forEach((el) => {
+        const s = el.style;
+        s.setProperty("position", "static", "important");
+        s.setProperty("transform", "none", "important");
+        s.setProperty("overflow", "visible", "important");
+        s.setProperty("width", "auto", "important");
+        s.setProperty("height", "auto", "important");
+        s.setProperty("max-width", "none", "important");
+        s.setProperty("max-height", "none", "important");
+        s.setProperty("margin", "0", "important");
+        s.setProperty("padding", "0", "important");
+        s.setProperty("inset", "auto", "important");
+        s.setProperty("display", "block", "important");
+      });
+      // Hide nav chrome/overlays that are neither a slide, inside one, nor an
+      // ancestor of one, so they can't add stray printed pages.
+      document.querySelectorAll("body *").forEach((el) => {
+        if (el.matches("section[class*=slide]") || el.closest("section[class*=slide]") || ancestors.has(el)) return;
+        el.style.setProperty("display", "none", "important");
+      });
+      // Bare text not inside any slide (leaked prose between sections) would
+      // render as its own page — remove it. Skip <style>/<script> text.
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const stray = [];
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const tag = node.parentElement && node.parentElement.tagName;
+        if (tag === "STYLE" || tag === "SCRIPT") continue;
+        if (node.textContent.trim() && !node.parentElement.closest("section[class*=slide]")) stray.push(node);
+      }
+      stray.forEach((node) => node.remove());
+    });
     await page.addStyleTag({ content: `
       @page { size: ${SLIDE_W}px ${SLIDE_H}px; margin: 0; }
       * { animation: none !important; transition: none !important; }
+      html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
       section[class*="slide"] { display:block !important; position:relative !important;
+        box-sizing:border-box !important;
         width:${SLIDE_W}px !important; height:${SLIDE_H}px !important;
         transform:none !important; opacity:1 !important; visibility:visible !important;
         page-break-after: always; break-after: page; page-break-inside: avoid; }

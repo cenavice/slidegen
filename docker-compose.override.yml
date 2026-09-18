@@ -1,0 +1,10 @@
+# Dev-only overrides: bind-mount the source and run under `node --watch`.
+# Compose loads this automatically on top of docker-compose.yml.
+# ponytail: `node --watch` uses filesystem events, which bind mounts can drop;
+# if an edit doesn't take effect, `docker restart slidegen-slidegen-1`.
+services:
+  slidegen:
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: node --watch server.js
