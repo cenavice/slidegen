@@ -48,7 +48,8 @@ The full generated file is checked in at [`sample/deck.html`](sample/deck.html) 
 
 ## Features
 
-- **Brief → deck** — describe the presentation in plain language; the model returns a self-contained HTML deck (fixed 1280×720 stage per slide) streamed live into the preview.
+- **Brief → deck** — describe the presentation in plain language; the model returns a self-contained HTML deck (fixed 1280×720 stage per slide).
+- **Resumable queue** — generations run server-side, one at a time, decoupled from the browser. Refreshing the page reattaches to the in-flight job instead of losing it; decks already saved to `output/` survive a server restart.
 - **Design systems** — curated system prompts (Swiss International and others, see `design/systems.js`) enforce consistent visuals; more can be added in one file.
 - **Slide editor** — restyle or rewrite any single slide ("make this less dense", "add an example"), or insert/delete/reorder slides. Edits are prompted with the surrounding deck for context so results stay visually coherent.
 - **Render-based audit** — decks are rendered in headless Chromium and checked for real geometry violations (overflow, tight margins) on the 1280×720 stage; violations are reported to the UI and retried automatically.
@@ -113,19 +114,21 @@ Env vars are fallbacks; anything set in the web UI overrides them.
 ```
 browser (public/)          server.js                    your provider
 ────────────────           ─────────                    ─────────────
-brief + settings ────POST /generate────►  POST <base>/chat/completions
-                                           (streamed, SSE)
-progress ◄──ndjson stream──                    │
-deck preview ◄──"done"────                     ▼
+brief + settings ────POST /generate────►  queue (one at a time) ──► POST <base>/chat/completions
+                                              │                         (streamed, SSE)
+poll GET /generate/:id ◄── job state ─────────┤
+deck preview ◄─────────── "done"              ▼
                                            headless Chromium
                                            geometry audit (audit.js)
 ```
 
-- `POST /generate` — full deck, streamed as newline-delimited JSON progress events.
+- `POST /generate` — enqueue a full-deck generation; returns a job id.
+- `GET /generate/:id` — job status (phase, progress, and the deck when done); used to reattach after a refresh.
+- `POST /generate/:id/cancel` — cancel a queued or running job.
 - `POST /edit` — single-slide replace/insert with retry passes: scoped-CSS check, fidelity check, render-audit.
 - `POST /models` — lists models from the provider (shape-tolerant across providers).
 - `POST /save` — persists the current deck to `output/`.
-- `POST /export` — PDF export (container only).
+- `POST /export` — PDF export (container only, also written to `output/pdf/`).
 
 ## Project layout
 

@@ -118,7 +118,8 @@ function textDeltaFromSseLine(line) {
 }
 
 // Stream a chat completion, invoking onChunk(delta, received, seconds) per text delta.
-function streamChat(config, body, onChunk) {
+// Pass a controller to cancel it from outside (e.g. a queued job's cancel button).
+function streamChat(config, body, onChunk, controller) {
   return new Promise((resolve, reject) => {
     const headers = { "Content-Type": "application/json", ...config.headers };
     if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
@@ -127,7 +128,7 @@ function streamChat(config, body, onChunk) {
     let received = 0;
     let settled = false;
     let reader = null;
-    const abort = new AbortController();
+    const abort = controller || new AbortController();
     const fail = (e) => { if (settled) return; settled = true; cleanup(); reject(e); };
     const finish = () => { if (!settled) { settled = true; cleanup(); resolve(received); } };
     const cleanup = () => { clearInterval(idle); clearTimeout(total); try { reader?.cancel(); } catch {} };
@@ -281,6 +282,107 @@ function overlap(tokensA, tokensB) {
   tokensA.forEach((word) => { if (tokensB.has(word)) shared++; });
   return shared / Math.min(tokensA.size, tokensB.size);
 }
+// ─── generation queue ──────────────────────────────────────────────
+// Generations run server-side, one at a time, decoupled from the HTTP request.
+// A page refresh aborts the fetch but not the job, so the client can reattach
+// with GET /generate/:id. In-memory only — jobs vanish on restart, but finished
+// decks are saved to output/.
+const jobs = new Map();
+const jobQueue = [];
+let jobRunning = false;
+let jobSeq = 0;
+
+function enqueueJob(config, prompt, preset) {
+  const job = {
+    id: `${Date.now().toString(36)}-${++jobSeq}`,
+    phase: "queued", chars: 0, html: "", seconds: 0, startedAt: 0,
+    issues: null, error: null, config, prompt, preset, abort: null,
+  };
+  jobs.set(job.id, job);
+  jobQueue.push(job);
+  pruneJobs();
+  pumpJobs();
+  return job;
+}
+
+function pumpJobs() {
+  if (jobRunning) return;
+  const job = jobQueue.shift();
+  if (job) runJob(job);
+}
+
+async function runJob(job) {
+  jobRunning = true;
+  job.phase = "running";
+  job.startedAt = Date.now();
+  job.abort = new AbortController();
+  let lastLogged = 0;
+  try {
+    log(`generate started: job=${job.id} model=${job.config.model} preset=${job.preset || "swiss"} brief=${job.prompt.length} chars`);
+    await streamChat(job.config, {
+      model: job.config.model,
+      stream: true,
+      messages: [
+        { role: "system", content: SYSTEMS[job.preset] || SYSTEMS.swiss },
+        { role: "user", content: job.prompt },
+      ],
+    }, (delta, chars) => {
+      job.html += delta;
+      job.chars = chars;
+      if (chars - lastLogged > 2000) {
+        lastLogged = chars;
+        log(`generate stream: job=${job.id} ${chars} chars in ${Math.round((Date.now() - job.startedAt) / 1000)}s`);
+      }
+    }, job.abort);
+    job.html = stripFences(job.html);
+    job.seconds = Math.round((Date.now() - job.startedAt) / 1000);
+    if (!/<html/i.test(job.html)) throw new Error("model did not return HTML. First 300 chars: " + job.html.slice(0, 300));
+    // Render-audit the whole deck; warn about margin/overflow issues so the user can ✎ fix targeted slides.
+    try {
+      const style = job.html.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] || "";
+      const sections = [...job.html.matchAll(/<section[\s\S]*?<\/section>/g)].map((match) => ({ html: match[0] }));
+      if (sections.length) {
+        const audit = await auditDeck(sections, style);
+        if (!audit.ok && audit.issues.length) {
+          job.issues = audit.issues;
+          audit.issues.forEach((issue) => log(`generate audit: slide ${issue.slide} — ${issue.msg}`));
+        }
+      }
+    } catch (auditError) { log(`generate audit skipped: ${auditError.message}`); }
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const dir = path.join(__dirname, "output", stamp);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "deck.html"), job.html);
+    log(`generate done: job=${job.id} ${job.html.length} chars in ${job.seconds}s → ${path.relative(__dirname, dir)}/deck.html`);
+    job.phase = "done";
+  } catch (error) {
+    if (job.abort && job.abort.signal.aborted) { job.phase = "cancelled"; log(`generate cancelled: job=${job.id}`); }
+    else { job.phase = "error"; job.error = error.message; log(`generate failed: job=${job.id} — ${error.message.slice(0, 120)}`); }
+  } finally {
+    job.config = null; job.prompt = null; job.abort = null;
+    jobRunning = false;
+    pumpJobs();
+  }
+}
+
+// Snapshot sent to the client — never includes credentials.
+function jobView(job) {
+  const view = { id: job.id, phase: job.phase, chars: job.chars };
+  if (job.phase === "queued") view.queuePosition = jobQueue.indexOf(job) + 1;
+  else if (job.phase === "running") view.seconds = Math.round((Date.now() - job.startedAt) / 1000);
+  else view.seconds = job.seconds;
+  if (job.phase === "done") { view.html = job.html; view.issues = job.issues || []; }
+  if (job.phase === "error") view.error = job.error;
+  return view;
+}
+
+// Keep memory bounded: drop the oldest finished jobs beyond JOBS_KEPT.
+const JOBS_KEPT = 30;
+function pruneJobs() {
+  const finished = [...jobs.values()].filter((job) => job.phase !== "queued" && job.phase !== "running");
+  for (let i = 0; i < finished.length - JOBS_KEPT; i++) jobs.delete(finished[i].id);
+}
+
 const server = http.createServer(async (req, res) => {
   const requestStartedAt = Date.now();
   const finish = (code, payload) => {
@@ -420,7 +522,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && req.url === "/generate") {
-    readBody(req, async (raw) => {
+    readBody(req, (raw) => {
       let parsed;
       try { parsed = JSON.parse(raw || "{}"); }
       catch { return send(res, 400, JSON.stringify({ error: "bad json" })); }
@@ -428,57 +530,32 @@ const server = http.createServer(async (req, res) => {
       if (!prompt || !prompt.trim()) return send(res, 400, JSON.stringify({ error: "prompt required" }));
       const config = providerConfig(provider);
       if (!config.apiKey) return send(res, 400, JSON.stringify({ error: "no API key: set it in provider settings" }));
-
-      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-      const write = (obj) => { try { res.write(JSON.stringify(obj) + "\n"); } catch {} };
-      const started = Date.now();
-      let htmlResult = "";
-      let lastLoggedChar = 0;
-      try {
-        log(`generate started: model=${config.model} preset=${preset || "swiss"} brief=${prompt.length} chars`);
-        await streamChat(config, {
-          model: config.model,
-          stream: true,
-          messages: [
-            { role: "system", content: SYSTEMS[preset] || SYSTEMS.swiss },
-            { role: "user", content: prompt.trim() },
-          ],
-        }, (delta, chars) => {
-          htmlResult += delta;
-          if (chars - lastLoggedChar > 2000) {
-            lastLoggedChar = chars;
-            log(`generate stream: ${chars} chars in ${Math.round((Date.now() - started) / 1000)}s`);
-          }
-          write({ phase: "progress", chars, seconds: Math.round((Date.now() - started) / 1000) });
-        });
-        htmlResult = stripFences(htmlResult);
-        if (!/<html/i.test(htmlResult)) throw new Error("model did not return HTML. First 300 chars: " + htmlResult.slice(0, 300));
-        // Render-audit the whole deck; warn about margin/overflow issues so the user can ✎ fix targeted slides.
-        try {
-          const style = htmlResult.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] || "";
-          const sections = [...htmlResult.matchAll(/<section[\s\S]*?<\/section>/g)].map((match) => ({ html: match[0] }));
-          if (sections.length) {
-            const audit = await auditDeck(sections, style);
-            if (!audit.ok && audit.issues.length) {
-              audit.issues.forEach((issue) => log(`generate audit: slide ${issue.slide} — ${issue.msg}`));
-              write({ phase: "warn", issues: audit.issues });
-            }
-          }
-        } catch (auditError) { log(`generate audit skipped: ${auditError.message}`); }
-        log(`${req.method} ${req.url} 200 in ${Date.now() - started}ms (${htmlResult.length} chars)`);
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-        const dir = path.join(__dirname, "output", stamp);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, "deck.html"), htmlResult);
-        log(`saved to ${path.relative(__dirname, dir)}/deck.html`);
-        write({ phase: "done", html: htmlResult });
-      } catch (error) {
-        log(`${req.method} ${req.url} 502 in ${Date.now() - started}ms — ${error.message.slice(0, 120)}`);
-        write({ phase: "error", error: error.message });
-      }
-      res.end();
+      const job = enqueueJob(config, prompt.trim(), preset);
+      finish(200, JSON.stringify(jobView(job)));
     });
     return;
+  }
+
+  // Poll a queued/running/finished job (used on page load to reattach).
+  const jobMatch = req.method === "GET" && /^\/generate\/([\w-]+)$/.exec(req.url);
+  if (jobMatch) {
+    const job = jobs.get(jobMatch[1]);
+    if (!job) return finish(404, JSON.stringify({ error: "unknown job" }));
+    return finish(200, JSON.stringify(jobView(job)));
+  }
+
+  const cancelMatch = req.method === "POST" && /^\/generate\/([\w-]+)\/cancel$/.exec(req.url);
+  if (cancelMatch) {
+    const job = jobs.get(cancelMatch[1]);
+    if (!job) return finish(404, JSON.stringify({ error: "unknown job" }));
+    if (job.phase === "queued") {
+      const i = jobQueue.indexOf(job);
+      if (i >= 0) jobQueue.splice(i, 1);
+      job.phase = "cancelled";
+    } else if (job.phase === "running" && job.abort) {
+      job.abort.abort();
+    }
+    return finish(200, JSON.stringify(jobView(job)));
   }
 
   // Static file fallback: serve files from public/, map "/" to index.html.

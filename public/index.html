@@ -316,9 +316,21 @@ function loading(on, text) {
     $("cancel").style.display = "none";
   }
 }
-let ctrl = null;
-$("cancel").addEventListener("click", () => { if (ctrl) ctrl.abort(); });
-window.addEventListener("keydown", (e) => { if (e.key === "Escape" && ctrl) ctrl.abort(); });
+const ACTIVE_JOB_KEY = "slidegen-active-job";
+let jobPoll = null;
+let ctrl = null; // in-flight slide edit (separate from generation, which is server-side)
+$("cancel").addEventListener("click", () => {
+  if (ctrl) { ctrl.abort(); return; }
+  const id = localStorage.getItem(ACTIVE_JOB_KEY);
+  if (id) fetch(`/generate/${id}/cancel`, { method: "POST" }).catch(() => {});
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (ctrl) { ctrl.abort(); return; }                       // cancel a slide edit
+  if (document.querySelector("dialog[open]")) return;       // let the dialog close itself
+  const id = localStorage.getItem(ACTIVE_JOB_KEY);
+  if (id) $("cancel").click();
+});
 
 // ─── model picker: a small combobox (type to search the provider's list, or type any name) ───
 let modelNames = [];
@@ -395,52 +407,64 @@ $("loadModels").addEventListener("click", async () => {
 
 $("go").addEventListener("click", async () => {
   $("error").textContent = "";   saveSettings(); paintDot();
-  ctrl = new AbortController();
   loading(true, "generating");
   try {
+    lastBrief = $("prompt").value;
     const r = await fetch("/generate", { method: "POST", headers: { "Content-Type": "application/json" },
-      signal: ctrl.signal,
       body: JSON.stringify({
         prompt: $("prompt").value,
         preset: presetValue("preset"),
         provider: { ...providerPayload(), model: $("model").value.trim() },
       }) });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || r.statusText); }
-    // NDJSON progress stream: {phase:"progress",chars,seconds} … {phase:"done",html} | {phase:"error",error}
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "", html = "", errMsg = null, warns = [];
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const msg = JSON.parse(line);
-        if (msg.phase === "progress") {
-          $("overlayText").textContent = `generating… ${msg.chars.toLocaleString()} chars · ${msg.seconds}s`;
-          if (tick) clearInterval(tick);
-        } else if (msg.phase === "error") errMsg = msg.error;
-        else if (msg.phase === "warn") warns = msg.issues || [];
-        else if (msg.phase === "done") html = msg.html;
-      }
-    }
-    if (errMsg && !html) throw new Error(errMsg);
-    showDeck(html);
-    lastBrief = $("prompt").value;
-    pushHistory(html);
-    $("status").textContent = warns.length
-      ? `done — ⚠ ${warns.map((w) => `slide ${w.slide}: ${w.msg}`).join(" · ")}`.slice(0, 220)
-      : "done — arrows to navigate the deck";
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    watchJob(d.id);
   } catch (e) {
-    if (e.name === "AbortError") $("status").textContent = "cancelled";
-    else $("error").textContent = (e.name === "TimeoutError" ? "connection timed out — provider too slow or unreachable. Try a smaller brief, faster model, or cancel & retry." : (e.message || "network error"));
-  } finally {
-    loading(false); ctrl = null;
+    loading(false);
+    $("error").textContent = e.message || "network error";
   }
 });
+
+// Generation runs server-side and keeps going when the page is refreshed: the job
+// id is stored locally and polled. On load we reattach to any job still in flight.
+function watchJob(id) {
+  localStorage.setItem(ACTIVE_JOB_KEY, id);
+  loading(true, "generating");
+  clearInterval(tick); tick = null; // the poll owns the overlay text
+  clearInterval(jobPoll);
+  jobPoll = setInterval(pollJob, 1000);
+  pollJob();
+}
+let pollBusy = false;
+async function pollJob() {
+  if (pollBusy) return;
+  const id = localStorage.getItem(ACTIVE_JOB_KEY);
+  if (!id) return stopPoll();
+  pollBusy = true;
+  let d;
+  try {
+    const r = await fetch(`/generate/${id}`);
+    d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.statusText);
+  } catch (e) {
+    pollBusy = false;
+    if (/unknown job/i.test(e.message || "")) { stopPoll(); $("error").textContent = "generation lost (server restarted) — please retry"; }
+    return; // transient network error — keep polling
+  }
+  pollBusy = false;
+  if (d.phase === "queued") $("overlayText").textContent = `queued… position ${d.queuePosition || 1}`;
+  else if (d.phase === "running") $("overlayText").textContent = `generating… ${(d.chars || 0).toLocaleString()} chars · ${d.seconds || 0}s`;
+  else if (d.phase === "done") { stopPoll(); showDeck(d.html); pushHistory(d.html); setDoneStatus(d.issues || []); }
+  else if (d.phase === "error") { stopPoll(); $("error").textContent = d.error || "generation failed"; }
+  else if (d.phase === "cancelled") { stopPoll(); $("status").textContent = "cancelled"; }
+}
+function stopPoll() { clearInterval(jobPoll); jobPoll = null; localStorage.removeItem(ACTIVE_JOB_KEY); loading(false); }
+function setDoneStatus(warns) {
+  $("status").textContent = warns.length
+    ? `done — ⚠ ${warns.map((w) => `slide ${w.slide}: ${w.msg}`).join(" · ")}`.slice(0, 220)
+    : "done — arrows to navigate the deck";
+}
+(function resumeJob() { const id = localStorage.getItem(ACTIVE_JOB_KEY); if (id) watchJob(id); })();
 
 let lastDeck = null, lastBrief = "";
 function showDeck(html) {
@@ -582,6 +606,7 @@ async function performEdit(i, act, instruction) {
     if (e.name !== "AbortError") $("error").textContent = e.message || String(e);
     editDlg.close();
   } finally {
+    ctrl = null;
     STRIP.querySelectorAll("button, input").forEach((el) => (el.disabled = false));
   }
 }
