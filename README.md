@@ -108,6 +108,7 @@ Env vars are fallbacks; anything set in the web UI overrides them.
 | `SLIDEGEN_IDLE_TIMEOUT_MS` | `120000` | Abort generation when nothing arrives from the provider for this long. |
 | `SLIDEGEN_TIMEOUT_MS` | `900000` | Hard cap for one generation regardless of progress. |
 | `SLIDEGEN_CHROME` | *(auto-detected)* | Path to the Chromium executable used by the audit/PDF. Falls back to common paths (`/usr/bin/chromium`, `chromium-browser`, `google-chrome`). |
+| `SLIDEGEN_OUTPUT_DIR` | `./output` | Directory for auto-saved decks and exported PDFs. |
 
 ## How it works
 
@@ -163,6 +164,14 @@ node --watch server.js    # reload on change
 ```
 
 `public/` is static — no build step; refresh after edits. The headless-Chromium audit (`audit.js`) is optional in dev; the app degrades gracefully when it's unavailable.
+
+### Tests
+
+```sh
+npm test        # node:test — pure unit tests plus an HTTP integration test
+```
+
+Tests use Node's built-in test runner (no dependencies) and need neither a provider key nor a browser: the HTTP test streams a canned deck from a local fake provider. Generated decks are written to a temp dir via `SLIDEGEN_OUTPUT_DIR`, so the repo's `output/` is untouched.
 
 ## License
 

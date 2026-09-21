@@ -6,6 +6,28 @@
 const fs = require("fs");
 const SLIDE_W = 1280, SLIDE_H = 720;
 
+// The house geometry rules on the fixed 1280x720 stage.
+const AUDIT_RULES = { width: SLIDE_W, height: SLIDE_H, margin: { left: 76, right: 76, top: 64, bottom: 96 } };
+
+// Apply the rules to measured content boxes ([{slide, top, bottom, left, right}]
+// in stage-relative px). Pure — no browser required, so it is unit-tested directly.
+function geometryIssues(boxes, rules = AUDIT_RULES) {
+  const SW = rules.width, SH = rules.height, M = rules.margin;
+  const issues = [];
+  for (const box of boxes) {
+    const top = Math.round(box.top), bottom = Math.round(box.bottom), left = Math.round(box.left), right = Math.round(box.right);
+    if (bottom > SH) issues.push({ slide: box.slide, msg: `overflows: content reaches y=${bottom}px > 720 stage` });
+    else if (bottom > SH - M.bottom + 8) issues.push({ slide: box.slide, msg: `tight bottom: content ends at y=${bottom}px, bottom margin must be >=96px (<=624px)` });
+    if (top < 0) issues.push({ slide: box.slide, msg: `content above slide top (y=${top}px)` });
+    else if (top < M.top - 24) issues.push({ slide: box.slide, msg: `tight top: content starts at y=${top}px, top margin must be >=64px` });
+    if (right > SW) issues.push({ slide: box.slide, msg: `overflows right: content at x=${right}px > 1280 stage` });
+    else if (right > SW - M.right + 8) issues.push({ slide: box.slide, msg: `tight right: content at x=${right}px, right margin must be >=76px (<=1204px)` });
+    if (left < 0) issues.push({ slide: box.slide, msg: `content left of slide edge (x=${left}px)` });
+    else if (left < M.left - 24) issues.push({ slide: box.slide, msg: `tight left: content at x=${left}px, left margin must be >=76px` });
+  }
+  return issues;
+}
+
 // Chromium's binary name varies by distro: Alpine ships /usr/bin/chromium,
 // Debian/Ubuntu chromium-browser, Google Chrome google-chrome. Detect it.
 function chromePath() {
@@ -58,12 +80,12 @@ async function auditDeck(sections, globalStyle) {
         slide.style.height = "720px";
       });
     });
-    const { issues } = await page.evaluate((SW, SH) => {
-      const MARGIN = { left: 76, right: 76, top: 64, bottom: 96 };
-      const issues = [];
+    // Measure each slide's content bounding box in the browser, then apply the
+    // geometry rules in Node (pure, unit-testable).
+    const boxes = await page.evaluate(() => {
+      const boxes = [];
       document.querySelectorAll("section[class*=slide]").forEach((slide, i) => {
         const slideRect = slide.getBoundingClientRect();
-        const slideNo = i + 1;
         // The slide's content bounding box, in viewport coordinates.
         let maxBottom = -1e9, minTop = 1e9, minLeft = 1e9, maxRight = -1e9;
         slide.querySelectorAll("*").forEach((el) => {
@@ -78,20 +100,12 @@ async function auditDeck(sections, globalStyle) {
           maxRight = Math.max(maxRight, r.right);
         });
         if (maxBottom === -1e9) return; // nothing measurable inside this slide
-        // Convert viewport coordinates back to "pixels from the slide's top-left corner".
-        const y = (v) => Math.round(v - slideRect.top);
-        const x = (v) => Math.round(v - slideRect.left);
-        if (y(maxBottom) > SH) issues.push({ slide: slideNo, msg: `overflows: content reaches y=${y(maxBottom)}px > 720 stage` });
-        else if (y(maxBottom) > SH - MARGIN.bottom + 8) issues.push({ slide: slideNo, msg: `tight bottom: content ends at y=${y(maxBottom)}px, bottom margin must be >=96px (<=624px)` });
-        if (y(minTop) < 0) issues.push({ slide: slideNo, msg: `content above slide top (y=${y(minTop)}px)` });
-        else if (y(minTop) < MARGIN.top - 24) issues.push({ slide: slideNo, msg: `tight top: content starts at y=${y(minTop)}px, top margin must be >=64px` });
-        if (x(maxRight) > SW) issues.push({ slide: slideNo, msg: `overflows right: content at x=${x(maxRight)}px > 1280 stage` });
-        else if (x(maxRight) > SW - MARGIN.right + 8) issues.push({ slide: slideNo, msg: `tight right: content at x=${x(maxRight)}px, right margin must be >=76px (<=1204px)` });
-        if (x(minLeft) < 0) issues.push({ slide: slideNo, msg: `content left of slide edge (x=${x(minLeft)}px)` });
-        else if (x(minLeft) < MARGIN.left - 24) issues.push({ slide: slideNo, msg: `tight left: content at x=${x(minLeft)}px, left margin must be >=76px` });
+        // Convert viewport coordinates back to pixels from the slide's top-left corner.
+        boxes.push({ slide: i + 1, top: minTop - slideRect.top, bottom: maxBottom - slideRect.top, left: minLeft - slideRect.left, right: maxRight - slideRect.left });
       });
-      return { issues };
-    }, SLIDE_W, SLIDE_H);
+      return boxes;
+    });
+    const issues = geometryIssues(boxes);
     await page.close();
     return { skipped: false, issues, ok: issues.length === 0 };
   } catch (error) {
@@ -185,4 +199,12 @@ async function exportPdf(html) {
   }
 }
 
-module.exports = { auditDeck, exportPdf };
+// Close the shared browser (used by tests/shutdown so the process can exit).
+async function closeChrome() {
+  if (!browser) return;
+  const instance = browser;
+  browser = null;
+  try { await instance.close(); } catch {}
+}
+
+module.exports = { auditDeck, exportPdf, geometryIssues, AUDIT_RULES, closeChrome };

@@ -1,1 +1,9 @@
-{ "name": "slidegen", "version": "0.1.0", "type": "commonjs", "private": true }
+{
+  "name": "slidegen",
+  "version": "0.1.0",
+  "type": "commonjs",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}
