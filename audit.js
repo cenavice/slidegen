@@ -125,6 +125,10 @@ async function exportPdf(html) {
     await page.evaluate(() => {
       const slides = [...document.querySelectorAll("section[class*=slide]")];
       if (!slides.length) return;
+      // Reveal every slide but KEEP the deck's own display (usually flex) — forcing
+      // display:block breaks those layouts and overflows the 720 stage.
+      slides.forEach((slide) => slide.classList.add("active"));
+      slides.forEach((slide) => { if (getComputedStyle(slide).display === "none") slide.style.setProperty("display", "block", "important"); });
       const ancestors = new Set();
       slides.forEach((slide) => {
         for (let parent = slide.parentElement; parent && parent !== document.documentElement; parent = parent.parentElement) ancestors.add(parent);
@@ -165,7 +169,7 @@ async function exportPdf(html) {
       @page { size: ${SLIDE_W}px ${SLIDE_H}px; margin: 0; }
       * { animation: none !important; transition: none !important; }
       html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
-      section[class*="slide"] { display:block !important; position:relative !important;
+      section[class*="slide"] { position:relative !important;
         box-sizing:border-box !important;
         width:${SLIDE_W}px !important; height:${SLIDE_H}px !important;
         transform:none !important; opacity:1 !important; visibility:visible !important;
